@@ -1,0 +1,26 @@
+# ===== Agent Hub V1 后端依赖 =====
+# Web 框架
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# 配置
+pydantic>=2.9
+pydantic-settings>=2.5
+python-dotenv>=1.0
+
+# Agent 编排(§2: LangGraph 扁平 agent 内核)
+langgraph>=0.2
+langchain-openai>=0.2
+
+# 沙箱控制面(§3: Docker 后端)
+docker>=7.0
+
+# 数据层(§4.3: PG + pgvector;本轮只连通,暂不建表)
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+# pgvector 扩展支持(后续知识库 §5.3 用)
+pgvector>=0.3
+
+# 气动替身(§4.1: AeroSandbox VLM)
+aerosandbox>=4.2
+numpy>=1.26

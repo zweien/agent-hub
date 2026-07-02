@@ -1,0 +1,34 @@
+# ===== Agent Hub .gitignore =====
+
+# 密钥/配置(含 LLM API key,绝不进 git)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Node/前端
+node_modules/
+.next/
+dist/
+
+# Docker 卷/数据
+data/
+pgdata/
+redis-data/
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+BLOCKERS.md
