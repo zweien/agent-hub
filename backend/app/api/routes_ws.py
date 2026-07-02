@@ -99,6 +99,29 @@ async def chat_ws(ws: WebSocket, session_id: str | None = Query(default=None)):
                 registry.end_takeover(current_sid)
                 continue
 
+            # —— 控制消息:工具确认(§5.4)——
+            if msg_type == "confirm":
+                if not current_sid:
+                    continue
+                registry.resolve_confirm(
+                    current_sid, msg.get("action_id", ""),
+                    approved=msg.get("approved", False),
+                    args=msg.get("args"),
+                )
+                continue
+            if msg_type == "set_mode":
+                if not current_sid:
+                    continue
+                registry.set_mode(current_sid, msg.get("mode", "standard"))
+                continue
+
+            # —— 控制消息:失败恢复(§5.5)——
+            if msg_type == "recover":
+                if not current_sid:
+                    continue
+                await registry.recover(current_sid, msg.get("action", "end"))
+                continue
+
             # —— 普通对话消息 ——
             user_input = msg.get("message", "").strip()
             if not user_input:
