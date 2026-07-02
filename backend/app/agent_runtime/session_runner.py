@@ -21,6 +21,7 @@ from app.models.event import Event
 from app.models.session import Session
 from app.agent_runtime.aero_agent import astream_agent
 from app.agent_runtime.guardrails import Mode, Limits
+from app.config import get_settings
 
 logger = logging.getLogger("session_runner")
 
@@ -58,6 +59,9 @@ class SessionState:
     decision_result: asyncio.Queue = field(default_factory=asyncio.Queue)
     # 失败恢复(§5.5):记录上一轮用户输入,失败后 retry 用
     last_user_input: str = ""
+    # 运行时模型/工具选择(§8 输入区):会话级覆盖
+    model: str = ""           # 空=用 config 默认
+    enabled_tools: set = field(default_factory=set)  # 空=全部启用
 
 
 class SessionRegistry:
@@ -70,6 +74,7 @@ class SessionRegistry:
         if session_id not in self._sessions:
             st = SessionState(session_id=session_id)
             st.resume_event.set()  # 初始:agent 可运行(非挂起)
+            st.model = get_settings().llm_model  # 默认用 config
             self._sessions[session_id] = st
         return self._sessions[session_id]
 
@@ -141,7 +146,7 @@ class SessionRegistry:
                 # 记录用户消息事件
                 self._persist_event(session_id, state,
                                     {"type": "message_in", "content": user_input}, actor="user")
-                async for event in astream_agent(user_input):
+                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools):
                     # 接管门控(§2.3 C1):被 clear 时在此挂起,直到交还(set)
                     await state.resume_event.wait()
                     # 熔断计数(§5.4):token 不计入轮数;tool_start 才算一轮
@@ -232,6 +237,28 @@ class SessionRegistry:
         self._persist_event(session_id, state,
                             {"type": "mode_changed", "mode": state.mode.value}, actor="user")
         logger.info("模式切换 session=%s → %s", session_id, state.mode.value)
+
+    def set_model(self, session_id: str, model: str):
+        """切换会话模型(§8 输入区模型选择)。下次 agent 执行生效。"""
+        state = self._get_or_create(session_id)
+        state.model = model
+        self._persist_event(session_id, state, {"type": "model_changed", "model": model}, actor="user")
+        logger.info("模型切换 session=%s → %s", session_id, model)
+
+    def set_tools(self, session_id: str, tools: list[str]):
+        """选择启用的工具/技能(§8 输入区工具选择)。空=全部。"""
+        state = self._get_or_create(session_id)
+        state.enabled_tools = set(tools)
+        self._persist_event(session_id, state, {"type": "tools_changed", "tools": tools}, actor="user")
+        logger.info("工具选择 session=%s → %s", session_id, tools)
+
+    def cancel(self, session_id: str):
+        """用户中止当前 agent 执行(§8 发送后可终止)。"""
+        state = self._get_or_create(session_id)
+        if state.task and not state.task.done():
+            state.task.cancel()
+            logger.info("用户中止 session=%s", session_id)
+        self._persist_event(session_id, state, {"type": "interrupted", "reason": "用户中止"}, actor="user")
 
     # —— 失败恢复(§5.5)——
     async def request_failure_pause(self, session_id: str, tool: str, reason: str) -> dict:

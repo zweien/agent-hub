@@ -114,6 +114,21 @@ async def chat_ws(ws: WebSocket, session_id: str | None = Query(default=None)):
                     continue
                 registry.set_mode(current_sid, msg.get("mode", "standard"))
                 continue
+            if msg_type == "set_model":
+                if not current_sid:
+                    continue
+                registry.set_model(current_sid, msg.get("model", ""))
+                continue
+            if msg_type == "set_tools":
+                if not current_sid:
+                    continue
+                registry.set_tools(current_sid, msg.get("tools", []))
+                continue
+            if msg_type == "cancel":
+                if not current_sid:
+                    continue
+                registry.cancel(current_sid)
+                continue
 
             # —— 控制消息:失败恢复(§5.5)——
             if msg_type == "recover":

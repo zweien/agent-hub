@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/* ===== ChatGPT 浅色风格(决策 B:配色 + 重写 message + 左导航) ===== */
+:root {
+  /* 基础 */
+  --background: #ffffff;
+  --foreground: #0d0d0d;
+
+  /* shadcn 语义 token(ai-elements 组件用这些) */
+  --card: #ffffff;
+  --card-foreground: #0d0d0d;
+  --popover: #ffffff;
+  --popover-foreground: #0d0d0d;
+
+  /* 主色 = ChatGPT 绿(发送按钮/链接) */
+  --primary: #10a37f;
+  --primary-foreground: #ffffff;
+
+  /* 次要 = 用户消息气泡底色(浅灰) */
+  --secondary: #f4f4f4;
+  --secondary-foreground: #0d0d0d;
+
+  --muted: #f9f9f9;
+  --muted-foreground: #6e6e80;
+
+  --accent: #f0f0f0;
+  --accent-foreground: #0d0d0d;
+
+  --destructive: #ef4146;
+  --destructive-foreground: #ffffff;
+
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #10a37f;
+
+  --radius: 0.625rem;
+
+  /* 代码块(深色,ChatGPT 风格) */
+  --shiki-dark-bg: #0d0d0d;
+}
+
+/* 映射到 Tailwind v4 color token(ai-elements 用 bg-background/text-foreground 等) */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: ui-sans-serif, "Söhne", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ChatGPT 风格:AI 消息内容行高宽松 + 段落间距 */
+.prose-chat p { margin: 0.6em 0; }
+.prose-chat ul, .prose-chat ol { margin: 0.6em 0; padding-left: 1.5em; }
+.prose-chat li { margin: 0.25em 0; }
+.prose-chat table { border-collapse: collapse; margin: 0.8em 0; }
+.prose-chat th, .prose-chat td { border: 1px solid var(--border); padding: 6px 12px; }
+.prose-chat th { background: var(--muted); font-weight: 600; }

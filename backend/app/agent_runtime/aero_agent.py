@@ -85,16 +85,29 @@ def run_aero(*, span=10.0, area=10.0, alpha_deg=3.0, cd0=0.01, n_segs=8):
 from app.tools.aero import run_aero_tool  # noqa: E402
 
 
-def build_agent():
-    """构建气动优化 agent(扁平 ReAct 循环)。"""
+def build_agent(model: str = "", enabled_tools: set | None = None):
+    """构建气动优化 agent(扁平 ReAct 循环)。
+
+    model: 会话级模型覆盖(空=用 config 默认)
+    enabled_tools: 启用的工具名集合(空=全部)。工具名:_sweep_with_confirm 对外暴露为 run_sweep_in_sandbox
+    """
     s = get_settings()
     if not s.llm_api_key:
         raise ValueError("LLM_API_KEY 未设置(配 .env)")
+    use_model = model or s.llm_model
     llm = ChatOpenAI(
-        base_url=s.llm_base_url, api_key=s.llm_api_key, model=s.llm_model,
+        base_url=s.llm_base_url, api_key=s.llm_api_key, model=use_model,
         max_tokens=s.llm_max_tokens, temperature=0.3,
         streaming=True,  # token 级流式更稳(§2.3)
     )
+    # 工具过滤(§8 工具选择):enabled_tools 用对外名(run_aero_tool/run_sweep_in_sandbox)
+    all_tools = {"run_aero_tool": run_aero_tool, "run_sweep_in_sandbox": _sweep_with_confirm}
+    if enabled_tools:
+        tools = [tc for name, tc in all_tools.items() if name in enabled_tools]
+    else:
+        tools = list(all_tools.values())
+    if not tools:  # 至少留一个,避免空工具报错
+        tools = list(all_tools.values())
     system = (
         "你是机翼气动优化助手。你能:\n"
         "1) 用 run_aero_tool 做单次气动分析(给定翼展/面积/迎角,返回CL/CDi/L_D);\n"
@@ -102,7 +115,7 @@ def build_agent():
         "用户提需求时,先判断是否需要扫描;给出建议时附上数据支撑(具体数值)。\n"
         "气动常识:大展弦比降低诱导阻力、提升升阻比;椭圆分布 Oswald≈1。"
     )
-    return create_react_agent(llm, [run_aero_tool, _sweep_with_confirm], prompt=system)
+    return create_react_agent(llm, tools, prompt=system)
 
 
 @tool
@@ -180,7 +193,7 @@ def run(user_input: str) -> str:
     return final_text or "(agent 未产生最终文本)"
 
 
-async def astream_agent(user_input: str):
+async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None):
     """异步流式运行 agent(WebSocket §2.3 用),产出事件 dict。
 
     产出的事件类型(供 WebSocket 推送):
@@ -195,7 +208,7 @@ async def astream_agent(user_input: str):
       - updates 拿工具调用开始(AIMessage.tool_calls)与结果(ToolMessage)
     """
     from langchain_core.messages import AIMessageChunk, ToolMessage
-    agent = build_agent()
+    agent = build_agent(model=model, enabled_tools=enabled_tools)
     inputs = {"messages": [("user", user_input)]}
     try:
         async for mode, payload in agent.astream(inputs, stream_mode=["messages", "updates"]):
