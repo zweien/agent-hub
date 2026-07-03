@@ -18,6 +18,8 @@ export type WsEvent =
   | { type: "mode_changed"; mode: string }
   | { type: "interrupted"; reason: string; action_id?: string; options?: string[] }
   | { type: "recover"; action: string }
+  | { type: "sandbox_exec"; command: string; exit_code: number; stdout: string; stderr: string; duration_s: number }
+  | { type: "control_ack"; ok: boolean; message: string }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -30,11 +32,19 @@ export interface ToolCall {
   result?: string;
 }
 
+export interface SandboxExec {
+  command: string;
+  exit_code: number;
+  stdout: string;
+  duration_s: number;
+}
+
 export interface ChatMessage {
   id: string;
   from: "user" | "assistant";
   content: string;
   tools: ToolCall[];
+  sandboxExecs?: SandboxExec[];
   pendingConfirm?: { action_id: string; tool: string; args: Record<string, unknown> };
   interrupted?: { reason: string; action_id?: string };
 }
@@ -70,6 +80,49 @@ export function useChatSocket(url: string) {
     switch (event.type) {
       case "session_started":
         break;
+      case "replay": {
+        // 重连回放(§2.4):把历史事件投影成消息列表。
+        // token 合并到同一条 assistant 消息;tool_start/tool_end 配对;sandbox_exec 记录。
+        const rebuilt: ChatMessage[] = [];
+        let aiId: string | null = null;
+        for (const ev of event.events) {
+          if (ev.type === "message_in") {
+            rebuilt.push({ id: nextId(), from: "user", content: (ev as { content: string }).content, tools: [] });
+            aiId = null;
+          } else if (ev.type === "token") {
+            if (!aiId) {
+              aiId = nextId();
+              rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] });
+            }
+            const idx = rebuilt.findIndex((m) => m.id === aiId);
+            rebuilt[idx] = { ...rebuilt[idx], content: rebuilt[idx].content + (ev as { content: string }).content };
+          } else if (ev.type === "tool_start") {
+            if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
+            const t = ev as { name: string; args?: Record<string, unknown> };
+            const idx = rebuilt.findIndex((m) => m.id === aiId);
+            rebuilt[idx] = { ...rebuilt[idx], tools: [...rebuilt[idx].tools, { id: nextId(), name: t.name, args: t.args, status: "running" }] };
+          } else if (ev.type === "tool_end") {
+            const t = ev as { name: string; content: string };
+            // 配对最近的同名 running 工具
+            for (let i = rebuilt.length - 1; i >= 0; i--) {
+              const m = rebuilt[i];
+              const ti = [...m.tools].reverse().findIndex((x) => x.name === t.name && x.status === "running");
+              if (ti >= 0) {
+                const realIdx = m.tools.length - 1 - ti;
+                m.tools[realIdx] = { ...m.tools[realIdx], status: "done", result: t.content };
+                break;
+              }
+            }
+          } else if (ev.type === "sandbox_exec") {
+            if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
+            const s = ev as { command: string; exit_code: number; stdout: string; duration_s: number };
+            const idx = rebuilt.findIndex((m) => m.id === aiId);
+            rebuilt[idx] = { ...rebuilt[idx], sandboxExecs: [...(rebuilt[idx].sandboxExecs || []), { command: s.command, exit_code: s.exit_code, stdout: s.stdout, duration_s: s.duration_s }] };
+          }
+        }
+        setMessages(rebuilt);
+        break;
+      }
       case "token": {
         setStatus("streaming");
         setMessages((prev) => {
@@ -87,6 +140,25 @@ export function useChatSocket(url: string) {
         });
         break;
       }
+      case "sandbox_exec": {
+        // agent 在沙箱执行命令(§5.1):追加到当前 AI 消息
+        setMessages((prev) => {
+          let aiId = currentAiId.current;
+          let next = prev;
+          if (!aiId || !prev.find((m) => m.id === aiId)) {
+            aiId = nextId();
+            currentAiId.current = aiId;
+            next = [...prev, { id: aiId, from: "assistant" as const, content: "", tools: [] }];
+          }
+          return next.map((m) => m.id === aiId ? {
+            ...m, sandboxExecs: [...(m.sandboxExecs || []), { command: event.command, exit_code: event.exit_code, stdout: event.stdout, duration_s: event.duration_s }]
+          } : m);
+        });
+        break;
+      }
+      case "control_ack":
+        // §2: 控制消息回执(无 session 时 ok:false)。仅记录,不阻塞。
+        break;
       case "tool_start": {
         const tid = nextId();
         setMessages((prev) => {
@@ -160,14 +232,14 @@ export function useChatSocket(url: string) {
     }
   }, []);
 
-  // 上行:发消息
-  const sendMessage = useCallback((text: string) => {
+  // 上行:发消息(可选带 agent_config_id,§8 对话选配置)
+  const sendMessage = useCallback((text: string, agentConfigId?: string) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     // 本地先加用户消息
     setMessages((prev) => [...prev, { id: nextId(), from: "user", content: text, tools: [] }]);
     currentAiId.current = null;
-    ws.send(JSON.stringify({ message: text }));
+    ws.send(JSON.stringify({ message: text, agent_config_id: agentConfigId }));
   }, []);
 
   // 上行:工具确认

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -19,15 +19,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ArrowUpIcon, ExternalLinkIcon, RefreshCwIcon, SkipForwardIcon,
-  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon,
+  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon,
 } from "lucide-react";
-import { useChatSocket, type ChatMessage } from "@/hooks/use-chat-socket";
-import { useAuth } from "@/contexts/auth-context";
+import { useChatSocket, type ChatMessage, type SandboxExec } from "@/hooks/use-chat-socket";
+import { useAuth, API_BASE } from "@/contexts/auth-context";
 
 function buildWsUrl(token: string): string {
   if (typeof window === "undefined") return "ws://localhost:8000/ws/chat";
   return `ws://${window.location.hostname}:8000/ws/chat?token=${encodeURIComponent(token)}`;
 }
+
+interface AgentConfigBrief { id: string; name: string; model: string; mode: string; tools: string[] }
 
 function ToolCard({ tool }: { tool: ChatMessage["tools"][number] }) {
   return (
@@ -38,6 +40,21 @@ function ToolCard({ tool }: { tool: ChatMessage["tools"][number] }) {
         {tool.result && <ToolOutput output={tool.result} errorText={undefined} />}
       </ToolContent>
     </Tool>
+  );
+}
+
+function SandboxExecCard({ exec }: { exec: SandboxExec }) {
+  return (
+    <div className="my-1.5 rounded-lg border bg-zinc-950 p-2 text-xs text-zinc-200">
+      <div className="mb-1 flex items-center gap-1.5 font-mono text-zinc-400">
+        <TerminalIcon className="size-3" />
+        <span className="truncate">$ {exec.command}</span>
+        <span className={`ml-auto shrink-0 rounded px-1 ${exec.exit_code === 0 ? "bg-green-900/50 text-green-300" : "bg-red-900/50 text-red-300"}`}>
+          exit {exec.exit_code} · {exec.duration_s}s
+        </span>
+      </div>
+      {exec.stdout && <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-zinc-300">{exec.stdout.slice(0, 1500)}</pre>}
+    </div>
   );
 }
 
@@ -83,11 +100,37 @@ export function ChatView() {
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);
   const [mode, setLocalMode] = useState("standard");
+  // §8 对话选配置(§1 闭环核心:A 配置 → B 使用)
+  const [configs, setConfigs] = useState<AgentConfigBrief[]>([]);
+  const [agentConfigId, setAgentConfigId] = useState<string>("");
+
+  // 拉取已发布 agent 配置(B 类可见),供对话时选择
+  useEffect(() => {
+    if (!user) return;
+    fetch(`${API_BASE}/agents`, { headers: { Authorization: `Bearer ${user.token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: AgentConfigBrief[]) => setConfigs(list))
+      .catch(() => setConfigs([]));
+  }, [user]);
+
+  // 选了配置后,把它声明的 model/tools/mode 同步到会话(给 agent 用统一基线)
+  const applyConfig = (cfgId: string) => {
+    setAgentConfigId(cfgId);
+    const cfg = configs.find((c) => c.id === cfgId);
+    if (cfg) {
+      setLocalModel(cfg.model);
+      setLocalMode(cfg.mode);
+      setSelectedTools(cfg.tools);
+      setModel(cfg.model);
+      setGuardMode(cfg.mode);
+      setTools(cfg.tools);
+    }
+  };
 
   const submit = () => {
     const text = input.trim();
     if (!text) return;
-    sendMessage(text);
+    sendMessage(text, agentConfigId || undefined);
     setInput("");
   };
 
@@ -118,6 +161,7 @@ export function ChatView() {
             <Message key={msg.id} from={msg.from}>
               <MessageContent>
                 {msg.tools.map((t) => <ToolCard key={t.id} tool={t} />)}
+                {msg.sandboxExecs?.map((ex, i) => <SandboxExecCard key={`sx${i}`} exec={ex} />)}
                 <ConfirmBar msg={msg} onConfirm={confirm} />
                 <RecoveryBar msg={msg} onRecover={recover} />
                 {msg.content && <MessageResponse className="prose-chat">{msg.content}</MessageResponse>}
@@ -150,6 +194,17 @@ export function ChatView() {
                       onClick={() => alert("附件功能:V1 本地预览,后端解析留 V2")}>
                 <PaperclipIcon className="size-4" />
               </Button>
+              {/* Agent 配置选择(§1 闭环:对话用哪个已发布配置) */}
+              <Select value={agentConfigId} onValueChange={applyConfig}>
+                <SelectTrigger className="h-8 w-[130px] gap-1 border-0 bg-muted/60 text-xs">
+                  <SelectValue placeholder="默认助手" />
+                </SelectTrigger>
+                <SelectContent>
+                  {configs.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {/* 模型选择 */}
               <Select value={model} onValueChange={(v) => { setLocalModel(v); setModel(v); }}>
                 <SelectTrigger className="h-8 w-[150px] gap-1 border-0 bg-muted/60 text-xs">

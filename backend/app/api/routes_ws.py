@@ -122,23 +122,24 @@ async def chat_ws(
                     args=msg.get("args"),
                 )
                 continue
-            if msg_type == "set_mode":
+            if msg_type in ("set_mode", "set_model", "set_tools"):
+                # 控制消息需先有会话(§8):无 session 时回 control_ack 提示前端,
+                # 避免前端无回执以为已生效(隐性 bug)。首条消息后会话建立,再发即生效。
                 if not current_sid:
+                    await ws.send_json({"type": "control_ack", "ok": False,
+                                        "message": f"{msg_type} 需先发送一条消息建立会话,已缓存到本地;首条消息后重新选择"})
                     continue
-                registry.set_mode(current_sid, msg.get("mode", "standard"))
-                continue
-            if msg_type == "set_model":
-                if not current_sid:
-                    continue
-                registry.set_model(current_sid, msg.get("model", ""))
-                continue
-            if msg_type == "set_tools":
-                if not current_sid:
-                    continue
-                registry.set_tools(current_sid, msg.get("tools", []))
+                if msg_type == "set_mode":
+                    registry.set_mode(current_sid, msg.get("mode", "standard"))
+                elif msg_type == "set_model":
+                    registry.set_model(current_sid, msg.get("model", ""))
+                else:
+                    registry.set_tools(current_sid, msg.get("tools", []))
+                await ws.send_json({"type": "control_ack", "ok": True, "message": msg_type})
                 continue
             if msg_type == "cancel":
                 if not current_sid:
+                    await ws.send_json({"type": "control_ack", "ok": False, "message": "无活跃会话"})
                     continue
                 registry.cancel(current_sid)
                 continue
@@ -157,13 +158,25 @@ async def chat_ws(
 
             if not current_sid:
                 current_sid = _new_sid()
-                _create_session_in_db(current_sid, title=user_input[:40], owner_id=current_user.get("username"))
+                # 首条消息可带 agent_config_id(§8 对话选配置);记到 session
+                cfg_id = msg.get("agent_config_id")
+                _create_session_in_db(
+                    current_sid, title=user_input[:40],
+                    owner_id=current_user.get("username"),
+                    agent_config_id=cfg_id or None,
+                )
                 await ws.send_json({"type": "session_started", "session_id": current_sid})
                 sub_queue = registry.subscribe(current_sid)
                 pump_task = asyncio.create_task(_pump())
+                # 新会话首条消息:把配置 id 记进 SessionState(供 start_session 读 prompt/tools/model)
+                if cfg_id:
+                    state = registry._get_or_create(current_sid)
+                    state.__dict__["agent_config_id"] = cfg_id
 
             # 启动 agent task(后台,独立于 WS)
-            await registry.start_session(current_sid, user_input)
+            # 续同一会话的后续消息:若本次带了新的 agent_config_id 则覆盖
+            cfg_id = msg.get("agent_config_id")
+            await registry.start_session(current_sid, user_input, agent_config_id=cfg_id or "")
             # 事件由 _pump 持续推送,主循环继续收消息(含 takeover)
     except WebSocketDisconnect:
         logger.info("WS 断开 session=%s(agent task 继续)", current_sid)
