@@ -62,6 +62,11 @@ class SessionState:
     # 运行时模型/工具选择(§8 输入区):会话级覆盖
     model: str = ""           # 空=用 config 默认
     enabled_tools: set = field(default_factory=set)  # 空=全部启用
+    # 引用的 skill id 列表(§4.6,会话启动时同步进容器)
+    skill_ids: list = field(default_factory=list)
+    # 会话级容器(A2 决策:1会话=1容器)
+    container_name: str = ""
+    last_activity_at: float = field(default_factory=time.time)  # 空闲回收计时
 
 
 class SessionRegistry:
@@ -96,6 +101,7 @@ class SessionRegistry:
     def _persist_event(self, session_id: str, state: SessionState, event: dict, actor: str = "agent"):
         """写 DB(append-only)+ 推送给订阅者。"""
         state.next_seq += 1
+        state.last_activity_at = time.time()  # 每次事件刷新空闲回收计时
         db = SessionLocal()
         try:
             db.add(Event(
@@ -151,8 +157,11 @@ class SessionRegistry:
                     cfg_model = cfg.model
                     state.enabled_tools = cfg_tools
                     state.model = cfg_model
+                    state.skill_ids = list(cfg.skill_ids or [])
             finally:
                 db.close()
+        # A2:会话级容器——首条消息时起独立容器 + 同步 skills 进容器
+        self._ensure_container_and_skills(session_id, state)
         state.resume_event.set()
         if state.task and not state.task.done():
             logger.warning("session %s 已有运行中的 task", session_id)
@@ -205,8 +214,7 @@ class SessionRegistry:
         """请求接管(§2.3 C1):挂起 agent,返回 sandbox 工作环境 URL。"""
         state = self._get_or_create(session_id)
         state.resume_event.clear()  # 挂起:agent 在下一事件边界暂停
-        from app.config import get_settings
-        sandbox_url = get_settings().sandbox_public_url
+        sandbox_url = self.get_container_url(session_id)
         self._update_session_status(session_id, "human_takeover")
         self._persist_event(session_id, state, {"type": "takeover_begin"}, actor="user")
         logger.info("接管开始 session=%s(agent 挂起)", session_id)
@@ -278,6 +286,9 @@ class SessionRegistry:
             state.task.cancel()
             logger.info("用户中止 session=%s", session_id)
         self._persist_event(session_id, state, {"type": "interrupted", "reason": "用户中止"}, actor="user")
+        # A2:取消后释放容器(用户主动放弃)
+        self._release_container(session_id, destroy=True)
+        state.container_name = ""
 
     # —— 失败恢复(§5.5)——
     async def request_failure_pause(self, session_id: str, tool: str, reason: str) -> dict:
@@ -352,6 +363,101 @@ class SessionRegistry:
             return
         self._persist_event(session_id, state,
                             {"type": "sandbox_exec", **result.to_dict()}, actor="agent")
+
+    # —— A2 会话级容器 ——
+    def _ensure_container_and_skills(self, session_id: str, state: SessionState) -> None:
+        """起会话级容器(若未起)+ 同步 skills 进容器(§4.6)。
+
+        幂等:容器已存在则只更新活跃时间;skills 同步仅在新会话首条消息时做一次。
+        """
+        from app.sandbox_mgr.manager import get_manager
+        mgr = get_manager(on_exec=self._make_exec_callback(session_id))
+        state.last_activity_at = time.time()
+        try:
+            if not state.container_name:
+                state.container_name = mgr.acquire(session_id)
+                logger.info("会话 %s 容器就绪: %s", session_id, state.container_name)
+                # 同步 skills(若有)进容器的 /workspace/skills/<name>/
+                self._sync_skills_to_container(session_id, state, mgr)
+        except Exception as e:
+            # 容器起失败不应阻断 agent 对话(agent 仍可做不需沙箱的部分)
+            logger.warning("会话 %s 起容器失败(沙箱相关功能将不可用):%s", session_id, e)
+
+    def _sync_skills_to_container(self, session_id: str, state: SessionState, mgr) -> None:
+        """把 agent 配置引用的 skills 同步进容器的 /workspace/skills/。"""
+        if not state.skill_ids:
+            return
+        from app.db import SessionLocal as _SL
+        from app.models.skill import Skill
+        from app.sandbox_mgr import skill_store
+        db = _SL()
+        synced = []
+        try:
+            for sid in state.skill_ids:
+                s = db.get(Skill, sid)
+                if not s:
+                    continue
+                # 读文件系统内容(含 frontmatter + 脚本)
+                md, scripts = skill_store.read_skill_files(sid)
+                if not md:
+                    # 文件系统没有(PG 有),从 PG 重建
+                    md = skill_store._build_skill_md(s.name, s.description, s.content)
+                target_dir = f"/workspace/skills/{s.name}"
+                files = {f"{target_dir}/SKILL.md": md.encode("utf-8")}
+                for fname, fdata in scripts.items():
+                    files[f"{target_dir}/scripts/{fname}"] = fdata
+                mgr.put_files(session_id, files)
+                synced.append(s.name)
+        finally:
+            db.close()
+        if synced:
+            logger.info("会话 %s 同步 %d 个 skill:%s", session_id, len(synced), synced)
+
+    def _make_exec_callback(self, session_id: str):
+        """构造 on_exec 回调(注入到 SandboxManager,写 sandbox_exec 事件)。"""
+        def _cb(result):
+            self.persist_sandbox_exec(session_id, result)
+        return _cb
+
+    def _release_container(self, session_id: str, destroy: bool = True) -> None:
+        """回收会话容器(空闲超时/取消时)。"""
+        from app.sandbox_mgr.manager import get_manager
+        try:
+            get_manager().release(session_id, destroy=destroy)
+        except Exception as e:
+            logger.warning("回收容器失败 session=%s:%s", session_id, e)
+
+    def get_container_url(self, session_id: str) -> str:
+        """取会话容器的对外 URL(接管 §2.3 用)。"""
+        from app.config import get_settings
+        from app.sandbox_mgr.manager import get_manager
+        state = self._sessions.get(session_id)
+        if not state or not state.container_name:
+            return get_settings().sandbox_public_url  # 回退到全局
+        port = get_manager().get_container_port(session_id)
+        if port:
+            return f"http://localhost:{port}"
+        return get_settings().sandbox_public_url
+
+    def touch_activity(self, session_id: str) -> None:
+        """更新会话活跃时间(每次事件/操作调,重置空闲回收计时)。"""
+        state = self._sessions.get(session_id)
+        if state:
+            state.last_activity_at = time.time()
+
+    async def reap_idle_sessions(self, max_idle_s: int = 1800) -> int:
+        """扫回收空闲超时会话的容器(reaper task 调用)。返回回收数。"""
+        now = time.time()
+        reaped = 0
+        for sid, state in list(self._sessions.items()):
+            if state.task and not state.task.done():
+                continue  # 运行中不回收
+            if now - state.last_activity_at > max_idle_s:
+                self._release_container(sid, destroy=True)
+                state.container_name = ""
+                reaped += 1
+                logger.info("空闲回收 session=%s 容器", sid)
+        return reaped
 
     def get_history(self, session_id: str, limit: int = 100) -> list[dict]:
         """从 DB 读取会话历史事件(重连回放用)。"""

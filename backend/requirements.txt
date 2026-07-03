@@ -2,6 +2,7 @@
 # Web 框架
 fastapi>=0.115
 uvicorn[standard]>=0.32
+python-multipart>=0.0.9  # 文件上传(skill 脚本)
 
 # 配置
 pydantic>=2.9

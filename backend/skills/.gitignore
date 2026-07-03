@@ -1,0 +1,3 @@
+
+# 运行时生成的 skill 内容目录(每个 skill_id 一个),不进 git
+skill_*/

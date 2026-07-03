@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="deepseek-v4-flash")
     llm_max_tokens: int = Field(default=4000)  # 推理模型需较大预算(§9 发现)
 
-    # —— 沙箱(§3)——
-    sandbox_image: str = Field(default="ghcr.io/agent-infra/sandbox:latest")
+    # —— 沙箱(§3,A2 会话级容器)——
+    # 默认用预装了气动依赖的自定义镜像(避免 per-session 容器每次 pip install aerosandbox 耗时/OOM)
+    sandbox_image: str = Field(default="agent-hub-sandbox:latest")
     sandbox_gpu: bool = Field(default=False)
     # Compose 里 sandbox 服务地址(容器间网络);本地直跑用 http://localhost:8080
     sandbox_base_url: str = Field(default="http://sandbox:8080")
