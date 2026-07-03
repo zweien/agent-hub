@@ -371,7 +371,9 @@ class SessionRegistry:
         幂等:容器已存在则只更新活跃时间;skills 同步仅在新会话首条消息时做一次。
         """
         from app.sandbox_mgr.manager import get_manager
-        mgr = get_manager(on_exec=self._make_exec_callback(session_id))
+        # 存 exec observer 到 state,供 build_agent 取用(挂 skills middleware 时传给容器 backend)
+        state.__dict__["_exec_observer"] = self._make_exec_callback(session_id)
+        mgr = get_manager(on_exec=state.__dict__["_exec_observer"])
         state.last_activity_at = time.time()
         try:
             if not state.container_name:
