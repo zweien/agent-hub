@@ -17,7 +17,7 @@ from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from deepagents import create_deep_agent
 
 from app.config import get_settings
 from app.tools.aero import run_aero
@@ -74,11 +74,14 @@ from app.tools.aero import run_aero_tool  # noqa: E402
 
 
 def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt: str = ""):
-    """构建气动优化 agent(扁平 ReAct 循环)。
+    """构建 Deep Agent(路线B:deepagents create_deep_agent + skills/filesystem middleware)。
 
     model: 会话级模型覆盖(空=用 config 默认)
     enabled_tools: 启用的工具名集合(空=全部)。
     system_prompt: agent system prompt(空=用默认气动 prompt;§8 配置面传入)
+
+    skills 接入(§4.6):SkillsMiddleware + FilesystemMiddleware 共用 DockerContainerBackend,
+    指向【会话容器】的 /workspace/skills/。agent 的 read_file/ls 与 skills 发现路径空间统一。
     """
     s = get_settings()
     if not s.llm_api_key:
@@ -105,7 +108,35 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
         "用户提需求时,先判断是否需要扫描;给出建议时附上数据支撑(具体数值)。\n"
         "气动常识:大展弦比降低诱导阻力、提升升阻比;椭圆分布 Oswald≈1。"
     )
-    return create_react_agent(llm, tools, prompt=system)
+
+    # —— skills/filesystem:经会话容器 backend(路径统一)——
+    # 从当前 session 取 session_id(工具执行在同一进程全局)
+    from app.agent_runtime.session_runner import get_current_session
+    state = get_current_session()
+    extra_kwargs = {}
+    if state and state.session_id and state.container_name:
+        # 仅在会话容器就绪时挂 skills(无容器=同步 POST /chat 路径,不挂)
+        try:
+            from app.sandbox_mgr.docker_backend import DockerContainerBackend
+            from app.sandbox_mgr.manager import get_manager as _gm
+            mgr = _gm(on_exec=state.__dict__.get("_exec_observer"))
+            backend = DockerContainerBackend(mgr, state.session_id)
+            # 把 backend 传给 create_deep_agent:它会把默认的 FilesystemMiddleware 和
+            # SkillsMiddleware 都接到【我的容器 backend】,路径空间统一(/workspace/skills/)。
+            extra_kwargs["backend"] = backend
+            # skills 指向容器内目录(会话启动时已同步);create_deep_agent 见 skills 自动加 SkillsMiddleware
+            extra_kwargs["skills"] = ["/workspace/skills"]
+            logger.info("build_agent 挂载 skills+filesystem backend(容器 %s, session=%s)",
+                        state.container_name, state.session_id)
+        except Exception as e:
+            logger.warning("挂载 skills backend 失败(agent 仍可跑,但无 skill):%s", e)
+
+    return create_deep_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=system,
+        **extra_kwargs,
+    )
 
 
 @tool

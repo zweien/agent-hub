@@ -94,8 +94,8 @@ def init_db():
             )
             db.add(sample)
             db.commit()
-            # 同步写文件系统(供会话容器同步用)
+            # 同步写文件系统(供会话容器同步用)——传 name/description 以生成合规 frontmatter
             from app.sandbox_mgr.skill_store import save_skill_files
-            save_skill_files(sample.id, sample.content, {})
+            save_skill_files(sample.id, sample.content, {}, name=sample.name, description=sample.description)
     finally:
         db.close()

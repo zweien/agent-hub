@@ -39,10 +39,11 @@ class Limits:
 
     @classmethod
     def for_mode(cls, mode: Mode) -> "Limits":
+        # Deep Agents 自带 file/subagent 工具会消耗 tool_call 预算,阈值较纯 ReAct 放松
         return {
-            Mode.STRICT:   cls(max_rounds=15, max_tool_calls=30, timeout_s=300),
-            Mode.STANDARD: cls(max_rounds=30, max_tool_calls=60, timeout_s=900),
-            Mode.YOLO:     cls(max_rounds=50, max_tool_calls=100, timeout_s=1800),
+            Mode.STRICT:   cls(max_rounds=25, max_tool_calls=60, timeout_s=600),
+            Mode.STANDARD: cls(max_rounds=40, max_tool_calls=100, timeout_s=1200),
+            Mode.YOLO:     cls(max_rounds=80, max_tool_calls=200, timeout_s=2400),
         }[mode]
 
 

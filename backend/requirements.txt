@@ -10,9 +10,10 @@ pydantic-settings>=2.5
 python-dotenv>=1.0
 itsdangerous>=2.2  # 鉴权 token 签名(§7)
 
-# Agent 编排(§2: LangGraph 扁平 agent 内核)
+# Agent 编排(路线B: deepagents 作运行时主体,构建于 LangGraph 之上)
 langgraph>=0.2
 langchain-openai>=0.2
+deepagents>=0.6  # skills/file_system/subagent harness(§4.6)
 
 # 沙箱控制面(§3: Docker 后端)
 docker>=7.0

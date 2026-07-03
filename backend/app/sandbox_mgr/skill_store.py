@@ -10,9 +10,27 @@ PG 存元数据+正文(便于查询),文件系统存原始文件(便于同步进
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger("skill_store")
+
+
+def _slugify(name: str) -> str:
+    """转 Anthropic skill 规范的 name:[a-z0-9-]+。
+
+    中文/空格/大写 → 小写连字符。保证 deepagents SkillsMiddleware 能正确发现。
+    """
+    # 非 ASCII(中文等)按音节难转,这里用 hash 保唯一性 + 可读前缀
+    if re.fullmatch(r"[a-z0-9-]+", name):
+        return name
+    ascii_part = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()
+    if ascii_part and re.fullmatch(r"[a-z0-9-]+", ascii_part):
+        return ascii_part
+    # 全非 ASCII(纯中文):用稳定短 hash
+    import hashlib
+    h = hashlib.md5(name.encode("utf-8")).hexdigest()[:8]
+    return f"skill-{h}"
 
 # skills 根目录:优先环境变量,否则相对 app 包的上两级(app/../skills)。
 # 容器内挂载在 /app/skills;本地开发在 backend/skills。
@@ -25,9 +43,13 @@ def _skill_dir(skill_id: str) -> Path:
 
 
 def _build_skill_md(name: str, description: str, content: str) -> str:
-    """拼装完整 SKILL.md(frontmatter + 正文)。Deep Agents 读 frontmatter 做 progressive disclosure。"""
+    """拼装完整 SKILL.md(frontmatter + 正文)。Deep Agents 读 frontmatter 做 progressive disclosure。
+
+    name 经 _slugify 转合规(Anthropic 规范要求 [a-z0-9-]+)。
+    """
+    slug = _slugify(name)
     return f"""---
-name: {name}
+name: {slug}
 description: {description}
 ---
 
