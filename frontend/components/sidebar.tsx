@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { PlaneIcon, SettingsIcon, LogOutIcon } from "lucide-react";
+import { PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -31,10 +31,13 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* 配置入口(所有角色可看,user 只读) */}
-      <nav className="flex-1 px-3 text-sm">
+      {/* 配置入口(所有角色可看,user 只读)+ 回放查看(§8) */}
+      <nav className="flex flex-1 flex-col gap-0.5 px-3 text-sm">
         <Link href="/agents" className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent">
           <SettingsIcon className="size-4" /> Agent 配置
+        </Link>
+        <Link href="/sessions" className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent">
+          <HistoryIcon className="size-4" /> 会话回放
         </Link>
       </nav>
 

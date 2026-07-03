@@ -341,6 +341,18 @@ class SessionRegistry:
         finally:
             db.close()
 
+    def persist_sandbox_exec(self, session_id: str, result) -> None:
+        """把一次 sandbox 命令执行结果写入事件流(§2.5 sandbox_exec / §5.1 可回放)。
+
+        result: sandbox_mgr.ExecResult(to_dict 可序列化)。
+        agent_runtime 经此把 agent 现写代码的执行痕迹纳入唯一事实源。
+        """
+        state = self._sessions.get(session_id)
+        if state is None:
+            return
+        self._persist_event(session_id, state,
+                            {"type": "sandbox_exec", **result.to_dict()}, actor="agent")
+
     def get_history(self, session_id: str, limit: int = 100) -> list[dict]:
         """从 DB 读取会话历史事件(重连回放用)。"""
         db = SessionLocal()

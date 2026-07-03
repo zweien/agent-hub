@@ -15,9 +15,14 @@ import time
 import urllib.request
 import json
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger("sandbox_mgr")
+
+
+# 回调类型:每次 exec 后被调用,传入 ExecResult(供调用方写事件流 §2.5)。
+# sandbox_mgr 不依赖 agent_runtime(§0 边界),由调用方注入回调。
+ExecObserver = Callable[["ExecResult"], None]
 
 
 @dataclass
@@ -40,9 +45,11 @@ class SandboxManager:
     本轮不做会话→容器映射(单常驻 sandbox);后续多实例时再按 session_id 路由。
     """
 
-    def __init__(self, base_url: str = "http://sandbox:8080", api_key: Optional[str] = None):
+    def __init__(self, base_url: str = "http://sandbox:8080", api_key: Optional[str] = None,
+                 on_exec: Optional[ExecObserver] = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.on_exec = on_exec  # 每次 exec 后回调(供调用方持久化为 sandbox_exec 事件)
         self.exec_log: list[ExecResult] = []
 
     def _post(self, path: str, payload: dict) -> dict:
@@ -69,6 +76,11 @@ class SandboxManager:
             command=command,
         )
         self.exec_log.append(result)
+        if self.on_exec is not None:
+            try:
+                self.on_exec(result)  # 通知调用方(写事件流 §5.1)
+            except Exception:
+                logger.debug("on_exec 回调异常(已忽略)", exc_info=True)
         logger.info("exec exit=%d %.3fs | %s", result.exit_code, duration, command[:80])
         return result
 
@@ -86,5 +98,5 @@ class SandboxManager:
 
 
 # 兼容 POC 调用方(acquire/release 在 HTTP 后端是 no-op,因为 Compose 常驻)
-def get_manager(base_url: str = "http://sandbox:8080") -> SandboxManager:
-    return SandboxManager(base_url=base_url)
+def get_manager(base_url: str = "http://sandbox:8080", on_exec: Optional[ExecObserver] = None) -> SandboxManager:
+    return SandboxManager(base_url=base_url, on_exec=on_exec)
