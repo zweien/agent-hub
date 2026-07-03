@@ -16,6 +16,7 @@ from app.api.routes_chat import router as chat_router
 from app.api.routes_ws import router as ws_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_agents import router as agents_router
+from app.api.routes_skills import router as skills_router
 from app.api.routes_sessions import router as sessions_router
 
 logging.basicConfig(
@@ -37,6 +38,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
+app.include_router(skills_router)
 app.include_router(sessions_router)
 app.include_router(chat_router)
 app.include_router(ws_router)
@@ -44,10 +46,23 @@ app.include_router(ws_router)
 
 @app.on_event("startup")
 async def startup() -> None:
-    # 建表(§2.5 事件流 + 会话;本轮用 create_all,不用 Alembic)
+    # 建表(§2.5 事件流 + 会话 + skill;本轮用 create_all,不用 Alembic)
     from app.db import init_db
     init_db()
-    logger.info("Agent Hub 启动 | 模型=%s | sandbox=%s | DB 建表完成", settings.llm_model, settings.sandbox_base_url)
+    # A2:启动空闲容器回收 reaper(每 60s 扫,>30min 回收)
+    import asyncio
+    from app.agent_runtime.session_runner import registry
+
+    async def _reaper():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await registry.reap_idle_sessions(max_idle_s=1800)
+            except Exception:
+                logger.warning("reaper 异常", exc_info=True)
+
+    asyncio.create_task(_reaper())
+    logger.info("Agent Hub 启动 | 模型=%s | sandbox=会话级容器 | DB 建表完成", settings.llm_model)
 
 
 @app.get("/")
