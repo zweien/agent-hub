@@ -22,10 +22,12 @@ import {
   XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon,
 } from "lucide-react";
 import { useChatSocket, type ChatMessage } from "@/hooks/use-chat-socket";
+import { useAuth } from "@/contexts/auth-context";
 
-const WS_URL = typeof window !== "undefined"
-  ? `ws://${window.location.hostname}:8000/ws/chat`
-  : "ws://localhost:8000/ws/chat";
+function buildWsUrl(token: string): string {
+  if (typeof window === "undefined") return "ws://localhost:8000/ws/chat";
+  return `ws://${window.location.hostname}:8000/ws/chat?token=${encodeURIComponent(token)}`;
+}
 
 function ToolCard({ tool }: { tool: ChatMessage["tools"][number] }) {
   return (
@@ -74,7 +76,9 @@ function RecoveryBar({ msg, onRecover }: { msg: ChatMessage; onRecover: (a: stri
 }
 
 export function ChatView() {
-  const { messages, status, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode } = useChatSocket(WS_URL);
+  const { user } = useAuth();
+  const wsUrl = user ? buildWsUrl(user.token) : "";
+  const { messages, status, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode } = useChatSocket(wsUrl);
   const [input, setInput] = useState("");
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);

@@ -124,16 +124,35 @@ class SessionRegistry:
             except asyncio.QueueFull:
                 logger.warning("订阅者队列满,丢弃事件 session=%s", session_id)
 
-    async def start_session(self, session_id: str, user_input: str):
+    async def start_session(self, session_id: str, user_input: str, agent_config_id: str = ""):
         """启动 agent 执行(后台 async task,独立于 WS)。
 
         每次(含 retry)重置防护计数 + 记录 last_user_input(§5.5 失败重试用)。
+        agent_config_id: 指定用哪个 agent 配置(§8);空=用 session 记录的或默认。
         """
         state = self._get_or_create(session_id)
         state.last_user_input = user_input
         state.started_at = time.time()   # 重置超时计时
         state.round_count = 0            # 重置熔断计数
         state.tool_call_count = 0
+        # 从 DB 读 agent 配置(§8):若有 config_id,取其 prompt/tools/model
+        cfg_prompt = ""
+        cfg_tools = state.enabled_tools
+        cfg_model = state.model
+        if agent_config_id or state.__dict__.get("agent_config_id"):
+            ac_id = agent_config_id or state.__dict__.get("agent_config_id")
+            db = SessionLocal()
+            try:
+                from app.models.agent_config import AgentConfig
+                cfg = db.get(AgentConfig, ac_id)
+                if cfg:
+                    cfg_prompt = cfg.system_prompt
+                    cfg_tools = set(cfg.tools or [])
+                    cfg_model = cfg.model
+                    state.enabled_tools = cfg_tools
+                    state.model = cfg_model
+            finally:
+                db.close()
         state.resume_event.set()
         if state.task and not state.task.done():
             logger.warning("session %s 已有运行中的 task", session_id)
@@ -146,7 +165,7 @@ class SessionRegistry:
                 # 记录用户消息事件
                 self._persist_event(session_id, state,
                                     {"type": "message_in", "content": user_input}, actor="user")
-                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools):
+                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=cfg_prompt):
                     # 接管门控(§2.3 C1):被 clear 时在此挂起,直到交还(set)
                     await state.resume_event.wait()
                     # 熔断计数(§5.4):token 不计入轮数;tool_start 才算一轮

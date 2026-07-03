@@ -33,22 +33,35 @@ logger = logging.getLogger("api.ws")
 router = APIRouter()
 
 
-def _create_session_in_db(session_id: str, title: str | None = None):
+def _create_session_in_db(session_id: str, title: str | None = None, owner_id: str | None = None, agent_config_id: str | None = None):
     db = SessionLocal()
     try:
         if not db.get(Session, session_id):
-            db.add(Session(id=session_id, status="running", title=title))
+            db.add(Session(id=session_id, status="running", title=title, owner_id=owner_id, agent_config_id=agent_config_id))
             db.commit()
     finally:
         db.close()
 
 
 @router.websocket("/ws/chat")
-async def chat_ws(ws: WebSocket, session_id: str | None = Query(default=None)):
-    """流式对话 WS。会话独立于连接(§2.4)。并发:pump + 收消息。"""
+async def chat_ws(
+    ws: WebSocket,
+    session_id: str | None = Query(default=None),
+    token: str | None = Query(default=None),
+):
+    """流式对话 WS。会话独立于连接(§2.4)。token 鉴权(§7)。"""
+    # WS 鉴权(§7):校验 token
+    from app.auth import verify_token
+    try:
+        current_user = verify_token(token) if token else {"username": None, "role": "user"}
+    except Exception:
+        await ws.accept()
+        await ws.send_json({"type": "error", "message": "未授权(token 无效)"})
+        await ws.close()
+        return
     await ws.accept()
     current_sid = session_id
-    logger.info("WS 连接 session_id=%s", current_sid or "(新建)")
+    logger.info("WS 连接 user=%s session_id=%s", current_user.get("username"), current_sid or "(新建)")
 
     # 重连:回放历史
     if current_sid:
@@ -144,7 +157,7 @@ async def chat_ws(ws: WebSocket, session_id: str | None = Query(default=None)):
 
             if not current_sid:
                 current_sid = _new_sid()
-                _create_session_in_db(current_sid, title=user_input[:40])
+                _create_session_in_db(current_sid, title=user_input[:40], owner_id=current_user.get("username"))
                 await ws.send_json({"type": "session_started", "session_id": current_sid})
                 sub_queue = registry.subscribe(current_sid)
                 pump_task = asyncio.create_task(_pump())

@@ -22,5 +22,7 @@ class Session(Base):
     id = Column(String(64), primary_key=True, default=_new_sid)
     status = Column(String(24), nullable=False, default="idle")  # state 机
     title = Column(Text, nullable=True)  # 首条用户消息摘要(便于列表)
+    owner_id = Column(String(64), nullable=True)  # 所属用户(§7)
+    agent_config_id = Column(String(64), nullable=True)  # 用的哪个 agent 配置(§8)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

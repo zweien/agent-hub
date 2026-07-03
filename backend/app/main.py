@@ -14,6 +14,9 @@ from app.config import get_settings
 from app.api.routes_health import router as health_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_ws import router as ws_router
+from app.api.routes_auth import router as auth_router
+from app.api.routes_agents import router as agents_router
+from app.api.routes_sessions import router as sessions_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +35,9 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(agents_router)
+app.include_router(sessions_router)
 app.include_router(chat_router)
 app.include_router(ws_router)
 

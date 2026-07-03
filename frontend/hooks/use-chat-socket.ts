@@ -54,6 +54,7 @@ export function useChatSocket(url: string) {
   const currentAiId = useRef<string | null>(null);
 
   const connect = useCallback(() => {
+    if (!url) return;  // 未登录时不连
     const ws = new WebSocket(url);
     wsRef.current = ws;
     ws.onopen = () => setStatus("ready");

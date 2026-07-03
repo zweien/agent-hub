@@ -38,6 +38,23 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Agent Hub V1")
     cors_origins: str = Field(default="*")
 
+    # —— 鉴权(§7,最简硬编码三账号)——
+    token_secret: str = Field(default="agent-hub-dev-secret-change-in-prod")
+    token_expire_hours: int = Field(default=24)
+    # 硬编码账号:"username:password:role" 列表(V1 最简,不搞用户管理)
+    auth_accounts: str = Field(
+        default="admin:admin123:admin,builder:builder123:builder,user:user123:user"
+    )
+
+    def accounts(self) -> dict:
+        """解析硬编码账号 → {username: {password, role}}。"""
+        result = {}
+        for entry in self.auth_accounts.split(","):
+            parts = entry.strip().split(":")
+            if len(parts) == 3:
+                result[parts[0]] = {"password": parts[1], "role": parts[2]}
+        return result
+
     def summary(self) -> dict:
         """脱敏摘要(供 /health,不泄露 key)。"""
         k = self.llm_api_key

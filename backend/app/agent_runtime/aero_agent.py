@@ -85,11 +85,12 @@ def run_aero(*, span=10.0, area=10.0, alpha_deg=3.0, cd0=0.01, n_segs=8):
 from app.tools.aero import run_aero_tool  # noqa: E402
 
 
-def build_agent(model: str = "", enabled_tools: set | None = None):
+def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt: str = ""):
     """构建气动优化 agent(扁平 ReAct 循环)。
 
     model: 会话级模型覆盖(空=用 config 默认)
-    enabled_tools: 启用的工具名集合(空=全部)。工具名:_sweep_with_confirm 对外暴露为 run_sweep_in_sandbox
+    enabled_tools: 启用的工具名集合(空=全部)。
+    system_prompt: agent system prompt(空=用默认气动 prompt;§8 配置面传入)
     """
     s = get_settings()
     if not s.llm_api_key:
@@ -108,7 +109,8 @@ def build_agent(model: str = "", enabled_tools: set | None = None):
         tools = list(all_tools.values())
     if not tools:  # 至少留一个,避免空工具报错
         tools = list(all_tools.values())
-    system = (
+    # system prompt(§8:配置面传入则用配置的,否则用默认气动)
+    system = system_prompt or (
         "你是机翼气动优化助手。你能:\n"
         "1) 用 run_aero_tool 做单次气动分析(给定翼展/面积/迎角,返回CL/CDi/L_D);\n"
         "2) 用 run_sweep_in_sandbox 做展弦比扫描找最优升阻比(在隔离沙箱跑)。\n"
@@ -193,7 +195,7 @@ def run(user_input: str) -> str:
     return final_text or "(agent 未产生最终文本)"
 
 
-async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None):
+async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = ""):
     """异步流式运行 agent(WebSocket §2.3 用),产出事件 dict。
 
     产出的事件类型(供 WebSocket 推送):
@@ -208,7 +210,7 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
       - updates 拿工具调用开始(AIMessage.tool_calls)与结果(ToolMessage)
     """
     from langchain_core.messages import AIMessageChunk, ToolMessage
-    agent = build_agent(model=model, enabled_tools=enabled_tools)
+    agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt)
     inputs = {"messages": [("user", user_input)]}
     try:
         async for mode, payload in agent.astream(inputs, stream_mode=["messages", "updates"]):
