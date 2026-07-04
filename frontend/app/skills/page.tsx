@@ -6,6 +6,8 @@ import { useAuth, API_BASE } from "@/contexts/auth-context";
 import { Sidebar } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { PlusIcon, ArrowLeftIcon, UploadIcon, TrashIcon } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
+import { Streamdown } from "streamdown";
 
 interface Skill {
   id: string; name: string; description: string; content: string;
@@ -34,6 +36,7 @@ export default function SkillsPage() {
   if (loading || !user) return <div className="flex h-screen items-center justify-center text-muted-foreground">加载中...</div>;
 
   const isBuilder = user.role === "builder" || user.role === "admin";
+  const toast = useToast();
 
   const saveSkill = async (s: Partial<Skill>) => {
     const body = {
@@ -42,17 +45,19 @@ export default function SkillsPage() {
     };
     const url = s.id ? `${API_BASE}/skills/${s.id}` : `${API_BASE}/skills`;
     const method = s.id ? "PUT" : "POST";
-    await fetch(url, {
+    const res = await fetch(url, {
       method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${user.token}` },
       body: JSON.stringify(body),
     });
-    setShowForm(false); setEditing(null); fetchSkills();
+    if (res.ok) { toast("success", "技能已保存"); setShowForm(false); setEditing(null); fetchSkills(); }
+    else { toast("error", `保存失败(${res.status})`); }
   };
 
   const deleteSkill = async (id: string) => {
     if (!confirm("确认删除该技能?")) return;
-    await fetch(`${API_BASE}/skills/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${user.token}` } });
-    fetchSkills();
+    const res = await fetch(`${API_BASE}/skills/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${user.token}` } });
+    if (res.ok) { toast("success", "已删除"); fetchSkills(); }
+    else { toast("error", "删除失败"); }
   };
 
   return (
@@ -64,7 +69,7 @@ export default function SkillsPage() {
             <div className="flex items-center gap-3">
               <Link href="/" className="text-muted-foreground hover:text-foreground"><ArrowLeftIcon className="size-5" /></Link>
               <h1 className="text-xl font-semibold">技能管理</h1>
-              <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">过渡期:待内核迁移后激活</span>
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">对话中按需加载</span>
             </div>
             {isBuilder && (
               <Button onClick={() => { setEditing(null); setShowForm(true); }}>
@@ -95,7 +100,11 @@ export default function SkillsPage() {
                   )}
                 </div>
                 {s.description && <div className="mt-1 text-sm text-muted-foreground">{s.description}</div>}
-                <pre className="mt-2 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs whitespace-pre-wrap">{s.content}</pre>
+                {s.content && (
+                  <div className="mt-2 max-h-40 overflow-auto rounded bg-muted/50 p-2 text-xs">
+                    <Streamdown>{s.content}</Streamdown>
+                  </div>
+                )}
               </div>
             ))}
           </div>
