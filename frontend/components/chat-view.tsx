@@ -30,6 +30,7 @@ function buildWsUrl(token: string): string {
 }
 
 interface AgentConfigBrief { id: string; name: string; model: string; mode: string; tools: string[] }
+interface ToolBrief { id: string; name: string; description: string; type: string }
 
 function ToolCard({ tool }: { tool: ChatMessage["tools"][number] }) {
   return (
@@ -103,14 +104,20 @@ export function ChatView() {
   // §8 对话选配置(§1 闭环核心:A 配置 → B 使用)
   const [configs, setConfigs] = useState<AgentConfigBrief[]>([]);
   const [agentConfigId, setAgentConfigId] = useState<string>("");
+  // 可用工具列表(动态拉取,替代硬编码)
+  const [availTools, setAvailTools] = useState<ToolBrief[]>([]);
 
-  // 拉取已发布 agent 配置(B 类可见),供对话时选择
+  // 拉取已发布 agent 配置 + 工具列表
   useEffect(() => {
     if (!user) return;
     fetch(`${API_BASE}/agents`, { headers: { Authorization: `Bearer ${user.token}` } })
       .then((r) => (r.ok ? r.json() : []))
       .then((list: AgentConfigBrief[]) => setConfigs(list))
       .catch(() => setConfigs([]));
+    fetch(`${API_BASE}/tools`, { headers: { Authorization: `Bearer ${user.token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: ToolBrief[]) => setAvailTools(list))
+      .catch(() => setAvailTools([]));
   }, [user]);
 
   // 选了配置后,把它声明的 model/tools/mode 同步到会话(给 agent 用统一基线)
@@ -237,18 +244,21 @@ export function ChatView() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
-                  {["run_aero_tool", "run_sweep_in_sandbox"].map((t) => (
-                    <DropdownMenuCheckboxItem
-                      key={t}
-                      checked={selectedTools.includes(t)}
-                      onCheckedChange={(chk) => {
-                        const next = chk ? [...selectedTools, t] : selectedTools.filter((x) => x !== t);
-                        setSelectedTools(next); setTools(next);
-                      }}
-                    >
-                      {t === "run_aero_tool" ? "气动分析" : "展弦比扫描"}
-                    </DropdownMenuCheckboxItem>
-                  ))}
+                  {availTools.map((t) => {
+                    const ref = t.id.startsWith("tool_") ? t.id : t.name;
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={t.id}
+                        checked={selectedTools.includes(ref)}
+                        onCheckedChange={(chk) => {
+                          const next = chk ? [...selectedTools, ref] : selectedTools.filter((x) => x !== ref);
+                          setSelectedTools(next); setTools(next);
+                        }}
+                      >
+                        {t.name} {t.type !== "builtin" && `(${t.type})`}
+                      </DropdownMenuCheckboxItem>
+                    );
+                  })}
                 </DropdownMenuContent>
               </DropdownMenu>
               {/* 防护模式 */}
