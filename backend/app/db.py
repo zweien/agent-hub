@@ -49,7 +49,7 @@ def init_db():
     create_all 不改已有表结构,故对新增列做幂等 ALTER(开发期迁移)。
     """
     # 确保所有 model 被导入,Base.metadata 才知道它们
-    from app.models import event, session, user, agent_config, skill  # noqa: F401
+    from app.models import event, session, user, agent_config, skill, tool  # noqa: F401
     Base.metadata.create_all(bind=engine)
     # 幂等迁移:agent_configs 加 skill_ids(已有表,create_all 不会加列)
     _ensure_column("agent_configs", "skill_ids", "JSONB NOT NULL DEFAULT '[]'::jsonb")
@@ -97,5 +97,25 @@ def init_db():
             # 同步写文件系统(供会话容器同步用)——传 name/description 以生成合规 frontmatter
             from app.sandbox_mgr.skill_store import save_skill_files
             save_skill_files(sample.id, sample.content, {}, name=sample.name, description=sample.description)
+
+        # 插样例用户工具(若表空)——演示 python 脚本型工具(在 sandbox 跑)
+        from app.models.tool import Tool
+        if db.query(Tool).count() == 0:
+            db.add(Tool(
+                name="rectangle_area",
+                description="计算矩形面积。输入长和宽(米),返回面积(平方米)。用于几何计算。",
+                type="python",
+                config={"code": "result = length * width\nprint(result)", "workdir": "/tmp"},
+                params_schema={
+                    "type": "object",
+                    "properties": {
+                        "length": {"type": "number", "description": "长(米)"},
+                        "width": {"type": "number", "description": "宽(米)"},
+                    },
+                    "required": ["length", "width"],
+                },
+                owner_id="admin", is_published=True,
+            ))
+            db.commit()
     finally:
         db.close()

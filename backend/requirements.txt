@@ -14,6 +14,8 @@ itsdangerous>=2.2  # 鉴权 token 签名(§7)
 langgraph>=0.2
 langchain-openai>=0.2
 deepagents>=0.6  # skills/file_system/subagent harness(§4.6)
+langchain-mcp-adapters>=0.1  # MCP 工具支持(§2.1 动作型走 MCP)
+mcp>=1.0  # MCP 协议运行时
 
 # 沙箱控制面(§3: Docker 后端)
 docker>=7.0

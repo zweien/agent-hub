@@ -92,14 +92,21 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
         max_tokens=s.llm_max_tokens, temperature=0.3,
         streaming=True,  # token 级流式更稳(§2.3)
     )
-    # 工具过滤(§8 工具选择):enabled_tools 用对外名(run_aero_tool/run_sweep_in_sandbox)
-    all_tools = {"run_aero_tool": run_aero_tool, "run_sweep_in_sandbox": _sweep_with_confirm}
+    # 注册内置工具(供工厂识别)
+    from app.agent_runtime.tool_factory import register_builtin, load_tools
+    register_builtin("run_aero_tool", run_aero_tool)
+    register_builtin("run_sweep_in_sandbox", _sweep_with_confirm)
+
+    # 工具加载(§8 工具选择 + 统一工具管理):
+    #   enabled_tools 含内置名(run_aero_tool)+ 用户工具 id(tool_xxx)
+    #   工厂按 type 实例化:内置直给 / python/bash→sandbox exec / web→HTTP / mcp→client
     if enabled_tools:
-        tools = [tc for name, tc in all_tools.items() if name in enabled_tools]
+        tools = load_tools(list(enabled_tools))
     else:
-        tools = list(all_tools.values())
+        # 空=全部内置(向后兼容)
+        tools = [run_aero_tool, _sweep_with_confirm]
     if not tools:  # 至少留一个,避免空工具报错
-        tools = list(all_tools.values())
+        tools = [run_aero_tool, _sweep_with_confirm]
     # system prompt(§8:配置面传入则用配置的,否则用默认气动)
     system = system_prompt or (
         "你是机翼气动优化助手。你能:\n"

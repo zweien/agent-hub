@@ -15,17 +15,14 @@ interface AgentConfig {
 }
 
 interface SkillBrief { id: string; name: string; description: string; is_published: boolean }
-
-const ALL_TOOLS = [
-  { id: "run_aero_tool", label: "气动分析" },
-  { id: "run_sweep_in_sandbox", label: "展弦比扫描" },
-];
+interface ToolBrief { id: string; name: string; description: string; type: string; is_published: boolean }
 
 export default function AgentsPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
   const [skills, setSkills] = useState<SkillBrief[]>([]);
+  const [availTools, setAvailTools] = useState<ToolBrief[]>([]);
   const [editing, setEditing] = useState<AgentConfig | null>(null);
   const [showForm, setShowForm] = useState(false);
 
@@ -46,7 +43,14 @@ export default function AgentsPage() {
     if (res.ok) setSkills(await res.json());
   };
 
-  useEffect(() => { fetchConfigs(); fetchSkills(); }, [user]);
+  // 拉工具列表(内置+用户,供配置表单勾选)
+  const fetchTools = async () => {
+    if (!user) return;
+    const res = await fetch(`${API_BASE}/tools`, { headers: { Authorization: `Bearer ${user.token}` } });
+    if (res.ok) setAvailTools(await res.json());
+  };
+
+  useEffect(() => { fetchConfigs(); fetchSkills(); fetchTools(); }, [user]);
 
   if (loading || !user) return <div className="flex h-screen items-center justify-center text-muted-foreground">加载中...</div>;
 
@@ -103,7 +107,7 @@ export default function AgentsPage() {
                   )}
                 </div>
                 <div className="mt-2 text-sm text-muted-foreground">
-                  模型: {c.model} · 模式: {c.mode} · 工具: {c.tools.map(t => ALL_TOOLS.find(a => a.id === t)?.label || t).join(", ")}
+                  模型: {c.model} · 模式: {c.mode} · 工具: {c.tools.map(t => { const tl = availTools.find(a => a.id === t || a.name === t); return tl?.name || t; }).join(", ")}
                 </div>
                 <pre className="mt-2 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs whitespace-pre-wrap">{c.system_prompt}</pre>
               </div>
@@ -116,6 +120,7 @@ export default function AgentsPage() {
               config={editing}
               isBuilder={isBuilder}
               skills={skills}
+              availTools={availTools}
               onSave={saveConfig}
               onCancel={() => { setShowForm(false); setEditing(null); }}
             />
@@ -128,8 +133,8 @@ export default function AgentsPage() {
 
 import Link from "next/link";
 
-function ConfigForm({ config, isBuilder, skills, onSave, onCancel }: {
-  config: AgentConfig | null; isBuilder: boolean; skills: SkillBrief[];
+function ConfigForm({ config, isBuilder, skills, availTools, onSave, onCancel }: {
+  config: AgentConfig | null; isBuilder: boolean; skills: SkillBrief[]; availTools: ToolBrief[];
   onSave: (c: Partial<AgentConfig>) => void; onCancel: () => void;
 }) {
   const [name, setName] = useState(config?.name || "");
@@ -171,15 +176,21 @@ function ConfigForm({ config, isBuilder, skills, onSave, onCancel }: {
             </div>
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">工具</label>
-            <div className="flex gap-4">
-              {ALL_TOOLS.map(t => (
-                <label key={t.id} className="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" checked={tools.includes(t.id)} disabled={!isBuilder}
-                    onChange={e => setTools(e.target.checked ? [...tools, t.id] : tools.filter(x => x !== t.id))} />
-                  {t.label}
-                </label>
-              ))}
+            <label className="mb-1 block text-sm font-medium">工具 <span className="text-xs text-muted-foreground">(内置 + 用户工具,见工具管理)</span></label>
+            <div className="flex max-h-32 flex-col gap-1 overflow-auto">
+              {availTools.map(t => {
+                // 内置工具按 name 引用,用户工具按 id 引用
+                const ref = t.id.startsWith("tool_") ? t.id : t.name;
+                return (
+                  <label key={t.id} className="flex items-center gap-1.5 text-sm">
+                    <input type="checkbox" checked={tools.includes(ref)} disabled={!isBuilder}
+                      onChange={e => setTools(e.target.checked ? [...tools, ref] : tools.filter(x => x !== ref))} />
+                    <span>{t.name}</span>
+                    {t.type !== "builtin" && <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{t.type}</span>}
+                    {t.description && <span className="truncate text-xs text-muted-foreground">— {t.description.slice(0, 40)}</span>}
+                  </label>
+                );
+              })}
             </div>
           </div>
           {/* 挂载技能(§4.6 能力包,会话启动时同步进容器) */}

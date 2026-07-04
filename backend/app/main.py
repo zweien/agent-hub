@@ -17,6 +17,7 @@ from app.api.routes_ws import router as ws_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_agents import router as agents_router
 from app.api.routes_skills import router as skills_router
+from app.api.routes_tools import router as tools_router
 from app.api.routes_sessions import router as sessions_router
 
 logging.basicConfig(
@@ -39,6 +40,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
 app.include_router(skills_router)
+app.include_router(tools_router)
 app.include_router(sessions_router)
 app.include_router(chat_router)
 app.include_router(ws_router)
