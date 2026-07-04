@@ -377,8 +377,11 @@ class SessionRegistry:
         state.last_activity_at = time.time()
         try:
             if not state.container_name:
-                state.container_name = mgr.acquire(session_id)
-                logger.info("会话 %s 容器就绪: %s", session_id, state.container_name)
+                # §3 GPU 透传:读 config.sandbox_gpu,有 GPU 机器设 SANDBOX_GPU=true 即启用
+                from app.config import get_settings
+                use_gpu = get_settings().sandbox_gpu
+                state.container_name = mgr.acquire(session_id, gpu=use_gpu)
+                logger.info("会话 %s 容器就绪: %s (gpu=%s)", session_id, state.container_name, use_gpu)
                 # 同步 skills(若有)进容器的 /workspace/skills/<name>/
                 self._sync_skills_to_container(session_id, state, mgr)
         except Exception as e:
