@@ -64,6 +64,8 @@ class SessionState:
     enabled_tools: set = field(default_factory=set)  # 空=全部启用
     # 引用的 skill id 列表(§4.6,会话启动时同步进容器)
     skill_ids: list = field(default_factory=list)
+    # 引用的沙箱模板(grilling:预置包+硬件配置);空=全局默认
+    sandbox_template_id: str = ""
     # 会话级容器(A2 决策:1会话=1容器)
     container_name: str = ""
     last_activity_at: float = field(default_factory=time.time)  # 空闲回收计时
@@ -158,6 +160,7 @@ class SessionRegistry:
                     state.enabled_tools = cfg_tools
                     state.model = cfg_model
                     state.skill_ids = list(cfg.skill_ids or [])
+                    state.sandbox_template_id = cfg.sandbox_template_id or ""
             finally:
                 db.close()
         # A2:会话级容器——首条消息时起独立容器 + 同步 skills 进容器
@@ -366,9 +369,10 @@ class SessionRegistry:
 
     # —— A2 会话级容器 ——
     def _ensure_container_and_skills(self, session_id: str, state: SessionState) -> None:
-        """起会话级容器(若未起)+ 同步 skills 进容器(§4.6)。
+        """起会话级容器(若未起)+ 按模板装包 + 同步 skills 进容器。
 
-        幂等:容器已存在则只更新活跃时间;skills 同步仅在新会话首条消息时做一次。
+        幂等:容器已存在则只更新活跃时间;skills/装包仅在新会话首条消息时做一次。
+        沙箱模板(grilling):若有 sandbox_template_id,用模板的 base_image/硬件/包;否则全局默认。
         """
         from app.sandbox_mgr.manager import get_manager
         # 存 exec observer 到 state,供 build_agent 取用(挂 skills middleware 时传给容器 backend)
@@ -377,11 +381,41 @@ class SessionRegistry:
         state.last_activity_at = time.time()
         try:
             if not state.container_name:
-                # §3 GPU 透传:读 config.sandbox_gpu,有 GPU 机器设 SANDBOX_GPU=true 即启用
+                # 解析沙箱模板(若有):读 DB 拿 base_image/硬件/pip 包
+                tpl = None
+                if state.sandbox_template_id:
+                    from app.models.sandbox_template import SandboxTemplate
+                    db = SessionLocal()
+                    try:
+                        tpl = db.get(SandboxTemplate, state.sandbox_template_id)
+                    finally:
+                        db.close()
+                # 硬件参数:模板有则用模板,否则全局 config
                 from app.config import get_settings
-                use_gpu = get_settings().sandbox_gpu
-                state.container_name = mgr.acquire(session_id, gpu=use_gpu)
-                logger.info("会话 %s 容器就绪: %s (gpu=%s)", session_id, state.container_name, use_gpu)
+                settings = get_settings()
+                if tpl:
+                    hw_kwargs = dict(
+                        image=tpl.base_image,
+                        cpu_limit=tpl.cpu_limit, mem_limit=tpl.mem_limit,
+                        shm_size=tpl.shm_size, env_vars=tpl.env_vars or {},
+                        gpu_count=tpl.gpu_count or 0,
+                    )
+                    # 模板没开 GPU 时,fallback 到全局 sandbox_gpu
+                    if not tpl.gpu_count:
+                        hw_kwargs["gpu"] = settings.sandbox_gpu
+                else:
+                    hw_kwargs = dict(gpu=settings.sandbox_gpu)
+                state.container_name = mgr.acquire(session_id, **hw_kwargs)
+                logger.info("会话 %s 容器就绪: %s (模板=%s)", session_id, state.container_name,
+                            tpl.name if tpl else "默认")
+                # 按模板装额外 pip 包(镜像已预装的不重复)
+                if tpl and tpl.pip_packages:
+                    pkgs = " ".join(tpl.pip_packages)
+                    try:
+                        r = mgr.exec(session_id, f"pip install --quiet {pkgs} 2>&1 | tail -2", workdir="/tmp")
+                        logger.info("会话 %s 模板装包完成 exit=%d", session_id, r.exit_code)
+                    except Exception as e:
+                        logger.warning("会话 %s 模板装包失败(不阻断):%s", session_id, e)
                 # 同步 skills(若有)进容器的 /workspace/skills/<name>/
                 self._sync_skills_to_container(session_id, state, mgr)
         except Exception as e:

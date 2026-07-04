@@ -10,12 +10,14 @@ import { useToast } from "@/components/ui/toast";
 
 interface AgentConfig {
   id: string; name: string; system_prompt: string;
-  tools: string[]; skill_ids: string[]; model: string; mode: string;
+  tools: string[]; skill_ids: string[]; sandbox_template_id: string | null;
+  model: string; mode: string;
   owner_id: string; is_published: boolean;
 }
 
 interface SkillBrief { id: string; name: string; description: string; is_published: boolean }
 interface ToolBrief { id: string; name: string; description: string; type: string; is_published: boolean }
+interface SandboxTemplateBrief { id: string; name: string; base_image: string }
 
 export default function AgentsPage() {
   const { user, loading } = useAuth();
@@ -23,6 +25,7 @@ export default function AgentsPage() {
   const [configs, setConfigs] = useState<AgentConfig[]>([]);
   const [skills, setSkills] = useState<SkillBrief[]>([]);
   const [availTools, setAvailTools] = useState<ToolBrief[]>([]);
+  const [sbTemplates, setSbTemplates] = useState<SandboxTemplateBrief[]>([]);
   const [editing, setEditing] = useState<AgentConfig | null>(null);
   const [showForm, setShowForm] = useState(false);
 
@@ -50,7 +53,14 @@ export default function AgentsPage() {
     if (res.ok) setAvailTools(await res.json());
   };
 
-  useEffect(() => { fetchConfigs(); fetchSkills(); fetchTools(); }, [user]);
+  // 拉沙箱模板列表(供配置表单选)
+  const fetchSbTemplates = async () => {
+    if (!user) return;
+    const res = await fetch(`${API_BASE}/sandbox-templates`, { headers: { Authorization: `Bearer ${user.token}` } });
+    if (res.ok) setSbTemplates(await res.json());
+  };
+
+  useEffect(() => { fetchConfigs(); fetchSkills(); fetchTools(); fetchSbTemplates(); }, [user]);
 
   if (loading || !user) return <div className="flex h-screen items-center justify-center text-muted-foreground">加载中...</div>;
 
@@ -61,6 +71,7 @@ export default function AgentsPage() {
     const body = {
       name: cfg.name, system_prompt: cfg.system_prompt, tools: cfg.tools || [],
       skill_ids: cfg.skill_ids || [],
+      sandbox_template_id: cfg.sandbox_template_id || null,
       model: cfg.model || "deepseek-v4-flash", mode: cfg.mode || "standard",
       is_published: cfg.is_published ?? false,
     };
@@ -121,6 +132,7 @@ export default function AgentsPage() {
               isBuilder={isBuilder}
               skills={skills}
               availTools={availTools}
+              sbTemplates={sbTemplates}
               onSave={saveConfig}
               onCancel={() => { setShowForm(false); setEditing(null); }}
             />
@@ -133,14 +145,15 @@ export default function AgentsPage() {
 
 import Link from "next/link";
 
-function ConfigForm({ config, isBuilder, skills, availTools, onSave, onCancel }: {
-  config: AgentConfig | null; isBuilder: boolean; skills: SkillBrief[]; availTools: ToolBrief[];
+function ConfigForm({ config, isBuilder, skills, availTools, sbTemplates, onSave, onCancel }: {
+  config: AgentConfig | null; isBuilder: boolean; skills: SkillBrief[]; availTools: ToolBrief[]; sbTemplates: SandboxTemplateBrief[];
   onSave: (c: Partial<AgentConfig>) => void; onCancel: () => void;
 }) {
   const [name, setName] = useState(config?.name || "");
   const [prompt, setPrompt] = useState(config?.system_prompt || "");
   const [tools, setTools] = useState<string[]>(config?.tools || []);
   const [skillIds, setSkillIds] = useState<string[]>(config?.skill_ids || []);
+  const [sbTemplateId, setSbTemplateId] = useState<string>(config?.sandbox_template_id || "");
   const [model, setModel] = useState(config?.model || "deepseek-v4-flash");
   const [mode, setMode] = useState(config?.mode || "standard");
   const [published, setPublished] = useState(config?.is_published || false);
@@ -209,6 +222,16 @@ function ConfigForm({ config, isBuilder, skills, availTools, onSave, onCancel }:
               </div>
             </div>
           )}
+          {/* 沙箱模板(grilling:预置包+硬件配置),会话起容器时用 */}
+          {sbTemplates.length > 0 && (
+            <div>
+              <label className="mb-1 block text-sm font-medium">沙箱模板 <span className="text-xs text-muted-foreground">(镜像+包+硬件配置)</span></label>
+              <select className="w-full rounded-lg border px-3 py-2 text-sm" value={sbTemplateId} onChange={e => setSbTemplateId(e.target.value)} disabled={!isBuilder}>
+                <option value="">默认(agent-hub-sandbox)</option>
+                {sbTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={published} disabled={!isBuilder} onChange={e => setPublished(e.target.checked)} />
             发布(发布后 B 类用户可见)
@@ -216,7 +239,7 @@ function ConfigForm({ config, isBuilder, skills, availTools, onSave, onCancel }:
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="outline" onClick={onCancel}>取消</Button>
-          {isBuilder && <Button onClick={() => onSave({ ...config, name, system_prompt: prompt, tools, skill_ids: skillIds, model, mode, is_published: published })}>保存</Button>}
+          {isBuilder && <Button onClick={() => onSave({ ...config, name, system_prompt: prompt, tools, skill_ids: skillIds, sandbox_template_id: sbTemplateId || null, model, mode, is_published: published })}>保存</Button>}
         </div>
       </div>
     </div>

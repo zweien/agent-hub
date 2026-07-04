@@ -22,6 +22,7 @@ class AgentConfigRequest(BaseModel):
     system_prompt: str
     tools: list[str] = []
     skill_ids: list[str] = []   # 引用的能力包(§4.6),会话启动时同步进容器
+    sandbox_template_id: str | None = None  # 引用的沙箱模板;空=全局默认
     model: str = "deepseek-v4-flash"
     mode: str = "standard"
     is_published: bool = False
@@ -61,7 +62,8 @@ async def create_agent(req: AgentConfigRequest, user: dict = Depends(require_rol
     try:
         cfg = AgentConfig(
             name=req.name, system_prompt=req.system_prompt, tools=req.tools,
-            skill_ids=req.skill_ids, model=req.model, mode=req.mode,
+            skill_ids=req.skill_ids, sandbox_template_id=req.sandbox_template_id,
+            model=req.model, mode=req.mode,
             owner_id=user["username"], is_published=req.is_published,
         )
         db.add(cfg)
@@ -85,6 +87,7 @@ async def update_agent(agent_id: str, req: AgentConfigRequest, user: dict = Depe
         cfg.system_prompt = req.system_prompt
         cfg.tools = req.tools
         cfg.skill_ids = req.skill_ids
+        cfg.sandbox_template_id = req.sandbox_template_id
         cfg.model = req.model
         cfg.mode = req.mode
         cfg.is_published = req.is_published

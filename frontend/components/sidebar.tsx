@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon, PuzzleIcon, MessageSquareIcon, WrenchIcon } from "lucide-react";
+import { PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon, PuzzleIcon, MessageSquareIcon, WrenchIcon, ServerIcon, BoxesIcon } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -41,13 +41,15 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* 导航:对话(主)+ 配置/技能/回放(控制台) */}
+      {/* 导航:对话(主)+ 配置/技能/回放(控制台)+ 沙箱(管理员) */}
       <nav className="flex flex-1 flex-col gap-0.5 px-3 text-sm">
         {navItem("/", <MessageSquareIcon className="size-4" />, "对话")}
         {navItem("/agents", <SettingsIcon className="size-4" />, "Agent 配置")}
         {navItem("/tools", <WrenchIcon className="size-4" />, "工具管理")}
         {navItem("/skills", <PuzzleIcon className="size-4" />, "技能管理")}
+        {navItem("/sandbox-templates", <BoxesIcon className="size-4" />, "沙箱模板")}
         {navItem("/sessions", <HistoryIcon className="size-4" />, "会话回放")}
+        {user?.role === "admin" && navItem("/sandboxes", <ServerIcon className="size-4" />, "沙箱管理")}
       </nav>
 
       <div className="border-t px-3 py-2">
