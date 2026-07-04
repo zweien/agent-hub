@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon, PuzzleIcon } from "lucide-react";
+import { PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon, PuzzleIcon, MessageSquareIcon } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -13,8 +13,18 @@ const ROLE_LABEL: Record<string, string> = {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   const handleLogout = () => { logout(); router.push("/login"); };
+
+  const navItem = (href: string, icon: React.ReactNode, label: string) => {
+    const active = pathname === href;
+    return (
+      <Link href={href} className={`flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent ${active ? "bg-accent font-medium text-foreground" : "text-muted-foreground"}`}>
+        {icon} {label}
+      </Link>
+    );
+  };
 
   return (
     <aside className="flex w-64 flex-col border-r bg-muted/50">
@@ -31,17 +41,12 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* 配置入口(所有角色可看,user 只读)+ 回放查看(§8)+ 技能管理(§4.6) */}
+      {/* 导航:对话(主)+ 配置/技能/回放(控制台) */}
       <nav className="flex flex-1 flex-col gap-0.5 px-3 text-sm">
-        <Link href="/agents" className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent">
-          <SettingsIcon className="size-4" /> Agent 配置
-        </Link>
-        <Link href="/skills" className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent">
-          <PuzzleIcon className="size-4" /> 技能管理
-        </Link>
-        <Link href="/sessions" className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent">
-          <HistoryIcon className="size-4" /> 会话回放
-        </Link>
+        {navItem("/", <MessageSquareIcon className="size-4" />, "对话")}
+        {navItem("/agents", <SettingsIcon className="size-4" />, "Agent 配置")}
+        {navItem("/skills", <PuzzleIcon className="size-4" />, "技能管理")}
+        {navItem("/sessions", <HistoryIcon className="size-4" />, "会话回放")}
       </nav>
 
       <div className="border-t px-3 py-2">

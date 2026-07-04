@@ -60,6 +60,8 @@ export function useChatSocket(url: string) {
   const [status, setStatus] = useState<ConnStatus>("connecting");
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   const [takeoverActive, setTakeoverActive] = useState(false);
+  // 当前会话 id(从 session_started 事件捕获;新对话=重连不带 session_id)
+  const [sessionId, setSessionId] = useState<string | null>(null);
   // 当前 AI 消息 id(流式追加用)
   const currentAiId = useRef<string | null>(null);
 
@@ -79,6 +81,7 @@ export function useChatSocket(url: string) {
   const handleEvent = useCallback((event: WsEvent) => {
     switch (event.type) {
       case "session_started":
+        setSessionId(event.session_id);
         break;
       case "replay": {
         // 重连回放(§2.4):把历史事件投影成消息列表。
@@ -280,10 +283,22 @@ export function useChatSocket(url: string) {
     wsRef.current?.send(JSON.stringify({ type: "set_mode", mode }));
   }, []);
 
+  // 新对话:重置消息 + 重连 WS(不带 session_id → 首条消息建新会话)
+  const newConversation = useCallback(() => {
+    setMessages([]);
+    setSessionId(null);
+    setSandboxUrl(null);
+    setTakeoverActive(false);
+    currentAiId.current = null;
+    // 关旧连接重开新连接(无 session_id → 新会话)
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    connect();
+  }, [connect]);
+
   useEffect(() => {
     connect();
     return () => wsRef.current?.close();
   }, [connect]);
 
-  return { messages, status, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode };
+  return { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation };
 }

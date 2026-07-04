@@ -6,6 +6,7 @@ import { useAuth, API_BASE } from "@/contexts/auth-context";
 import { Sidebar } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { PlusIcon, ArrowLeftIcon } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
 
 interface AgentConfig {
   id: string; name: string; system_prompt: string;
@@ -50,6 +51,7 @@ export default function AgentsPage() {
   if (loading || !user) return <div className="flex h-screen items-center justify-center text-muted-foreground">加载中...</div>;
 
   const isBuilder = user.role === "builder" || user.role === "admin";
+  const toast = useToast();
 
   const saveConfig = async (cfg: Partial<AgentConfig>) => {
     const body = {
@@ -60,11 +62,12 @@ export default function AgentsPage() {
     };
     const url = cfg.id ? `${API_BASE}/agents/${cfg.id}` : `${API_BASE}/agents`;
     const method = cfg.id ? "PUT" : "POST";
-    await fetch(url, {
+    const res = await fetch(url, {
       method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${user.token}` },
       body: JSON.stringify(body),
     });
-    setShowForm(false); setEditing(null); fetchConfigs();
+    if (res.ok) { toast("success", "配置已保存"); setShowForm(false); setEditing(null); fetchConfigs(); }
+    else { toast("error", `保存失败(${res.status})`); }
   };
 
   return (

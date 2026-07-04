@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ArrowUpIcon, ExternalLinkIcon, RefreshCwIcon, SkipForwardIcon,
-  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon,
+  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon,
 } from "lucide-react";
 import { useChatSocket, type ChatMessage, type SandboxExec } from "@/hooks/use-chat-socket";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
@@ -95,7 +95,7 @@ function RecoveryBar({ msg, onRecover }: { msg: ChatMessage; onRecover: (a: stri
 export function ChatView() {
   const { user } = useAuth();
   const wsUrl = user ? buildWsUrl(user.token) : "";
-  const { messages, status, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode } = useChatSocket(wsUrl);
+  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation } = useChatSocket(wsUrl);
   const [input, setInput] = useState("");
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);
@@ -143,10 +143,24 @@ export function ChatView() {
           <ExternalLinkIcon className="size-4" /> 已进入接管模式,点此打开工作环境(VSCode/终端)
         </a>
       )}
-      <div className="flex items-center gap-2 border-b px-4 py-2">
-        <Button size="sm" variant="ghost" onClick={() => takeover(!takeoverActive)}>
-          <HandIcon className="size-3.5" /> {takeoverActive ? "交还(恢复Agent)" : "接管"}
-        </Button>
+      <div className="flex items-center justify-between border-b px-4 py-2">
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => takeover(!takeoverActive)}>
+            <HandIcon className="size-3.5" /> {takeoverActive ? "交还(恢复Agent)" : "接管"}
+          </Button>
+          {status === "error" && (
+            <span className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-600">连接断开,正在重连...</span>
+          )}
+          {sessionId && (
+            <span className="text-xs text-muted-foreground">{sessionId.slice(0, 12)}...</span>
+          )}
+        </div>
+        {/* 新对话:仅非流式且已有消息时显示 */}
+        {status !== "streaming" && messages.length > 0 && (
+          <Button size="sm" variant="ghost" onClick={() => newConversation()}>
+            <PlusIcon className="size-3.5" /> 新对话
+          </Button>
+        )}
       </div>
 
       {/* 消息区 */}
