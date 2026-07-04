@@ -24,11 +24,12 @@ const TYPE_COLOR: Record<string, string> = {
 };
 
 export default function ToolsPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const router = useRouter();
   const [tools, setTools] = useState<Tool[]>([]);
   const [editing, setEditing] = useState<Tool | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const toast = useToast();
 
   useEffect(() => {
@@ -37,8 +38,14 @@ export default function ToolsPage() {
 
   const fetchTools = async () => {
     if (!user) return;
+    setLoadError(null);
     const res = await fetch(`${API_BASE}/tools`, { headers: { Authorization: `Bearer ${user.token}` } });
-    if (res.ok) setTools(await res.json());
+    if (res.ok) { setTools(await res.json()); }
+    else {
+      const msg = res.status === 401 ? "登录已过期,请重新登录" : `加载失败(${res.status})`;
+      setLoadError(msg);
+      if (res.status === 401) { logout(); router.push("/login"); }
+    }
   };
   useEffect(() => { fetchTools(); }, [user]);
 
@@ -87,7 +94,8 @@ export default function ToolsPage() {
           </div>
 
           <div className="space-y-3">
-            {tools.length === 0 && <div className="text-sm text-muted-foreground">暂无工具</div>}
+            {loadError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">⚠️ {loadError}</div>}
+            {tools.length === 0 && !loadError && <div className="text-sm text-muted-foreground">暂无工具</div>}
             {tools.map((t) => (
               <div key={t.id} className="rounded-lg border p-4">
                 <div className="flex items-center justify-between">

@@ -26,6 +26,8 @@ class AgentConfig(Base):
     tools = Column(JSONB, nullable=False, default=list)  # ["run_aero_tool", "run_sweep_in_sandbox"]
     # 引用的 skill id 列表(§4.6 能力包,会话启动时同步进容器 /workspace/skills/)
     skill_ids = Column(JSONB, nullable=False, default=list)
+    # 引用的沙箱模板(grilling:预置包+硬件配置);空=用全局默认
+    sandbox_template_id = Column(String(64), nullable=True)
     model = Column(String(64), nullable=False, default="deepseek-v4-flash")
     mode = Column(String(24), nullable=False, default="standard")  # strict/standard/yolo
     owner_id = Column(String(64), nullable=False)  # 创建者 username
@@ -36,6 +38,8 @@ class AgentConfig(Base):
     def to_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "system_prompt": self.system_prompt,
-            "tools": self.tools, "skill_ids": self.skill_ids, "model": self.model, "mode": self.mode,
+            "tools": self.tools, "skill_ids": self.skill_ids,
+            "sandbox_template_id": self.sandbox_template_id,
+            "model": self.model, "mode": self.mode,
             "owner_id": self.owner_id, "is_published": self.is_published,
         }

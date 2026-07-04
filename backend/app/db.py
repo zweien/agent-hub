@@ -49,10 +49,11 @@ def init_db():
     create_all 不改已有表结构,故对新增列做幂等 ALTER(开发期迁移)。
     """
     # 确保所有 model 被导入,Base.metadata 才知道它们
-    from app.models import event, session, user, agent_config, skill, tool  # noqa: F401
+    from app.models import event, session, user, agent_config, skill, tool, sandbox_template  # noqa: F401
     Base.metadata.create_all(bind=engine)
-    # 幂等迁移:agent_configs 加 skill_ids(已有表,create_all 不会加列)
+    # 幂等迁移:agent_configs 加 skill_ids / sandbox_template_id(已有表,create_all 不会加列)
     _ensure_column("agent_configs", "skill_ids", "JSONB NOT NULL DEFAULT '[]'::jsonb")
+    _ensure_column("agent_configs", "sandbox_template_id", "VARCHAR(64)")
     db = SessionLocal()
     try:
         # 插默认气动 agent 配置(若表空)
@@ -114,6 +115,19 @@ def init_db():
                     },
                     "required": ["length", "width"],
                 },
+                owner_id="admin", is_published=True,
+            ))
+            db.commit()
+
+        # 插默认沙箱模板(若表空)——标准沙箱(预装 aerosandbox,无硬件限制)
+        from app.models.sandbox_template import SandboxTemplate
+        if db.query(SandboxTemplate).count() == 0:
+            db.add(SandboxTemplate(
+                name="标准沙箱(预装气动)",
+                base_image="agent-hub-sandbox:latest",
+                pip_packages=[],  # aerosandbox 已预装进镜像
+                env_vars={},
+                gpu_count=0,  # 无 GPU 限制
                 owner_id="admin", is_published=True,
             ))
             db.commit()

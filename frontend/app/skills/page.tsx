@@ -15,11 +15,12 @@ interface Skill {
 }
 
 export default function SkillsPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
   const router = useRouter();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -27,8 +28,14 @@ export default function SkillsPage() {
 
   const fetchSkills = async () => {
     if (!user) return;
+    setLoadError(null);
     const res = await fetch(`${API_BASE}/skills`, { headers: { Authorization: `Bearer ${user.token}` } });
-    if (res.ok) setSkills(await res.json());
+    if (res.ok) { setSkills(await res.json()); }
+    else {
+      const msg = res.status === 401 ? "登录已过期,请重新登录" : `加载失败(${res.status})`;
+      setLoadError(msg);
+      if (res.status === 401) { logout(); router.push("/login"); }
+    }
   };
 
   useEffect(() => { fetchSkills(); }, [user]);
@@ -79,7 +86,8 @@ export default function SkillsPage() {
           </div>
 
           <div className="space-y-3">
-            {skills.length === 0 && <div className="text-sm text-muted-foreground">暂无技能</div>}
+            {loadError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600">⚠️ {loadError}</div>}
+            {skills.length === 0 && !loadError && <div className="text-sm text-muted-foreground">暂无技能</div>}
             {skills.map((s) => (
               <div key={s.id} className="rounded-lg border p-4">
                 <div className="flex items-center justify-between">
