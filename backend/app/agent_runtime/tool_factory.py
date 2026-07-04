@@ -148,36 +148,107 @@ def _make_mcp_tools(tool: Tool) -> list[BaseTool]:
     """连 MCP server,拉工具列表。返回多个 BaseTool(MCP server 可能暴露多个工具)。
 
     需 langchain-mcp-adapters。装不上则跳过(降级)。
+    config 格式:
+      stdio: {"transport":"stdio","command":"python","args":["server.py"]}
+      http:  {"transport":"streamable_http","server_url":"http://..."}
+    tool_filter: 可选,只取这些名字的工具。
     """
+    import asyncio
     cfg = tool.config or {}
-    tool_filter = cfg.get("tool_filter")  # 可选:只取这些名字
+    tool_filter = cfg.get("tool_filter")
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
     except ImportError:
         logger.warning("MCP 工具 %s 跳过:langchain-mcp-adapters 未安装", tool.name)
         return []
-    servers = {}
-    if cfg.get("server_url"):
-        servers[tool.name] = {"url": cfg["server_url"], "transport": "streamable_http"}
-    elif cfg.get("server_command"):
-        servers[tool.name] = {"command": cfg["server_command"], "transport": "stdio"}
+
+    # 构造 connections 参数(按 transport 类型)
+    connections: dict = {}
+    transport = cfg.get("transport", "stdio")
+    if transport == "streamable_http" or cfg.get("server_url"):
+        connections[tool.name] = {
+            "transport": "streamable_http",
+            "url": cfg.get("server_url", ""),
+        }
+    elif transport == "stdio" or cfg.get("command") or cfg.get("server_command"):
+        # server_command 兼容旧格式(命令 + 参数分离)
+        cmd = cfg.get("command") or (cfg.get("server_command") or [])
+        if isinstance(cmd, list):
+            command, args = (cmd[0] if cmd else ""), (cmd[1:] if len(cmd) > 1 else [])
+        else:
+            command, args = cmd, (cfg.get("args") or [])
+        connections[tool.name] = {
+            "transport": "stdio",
+            "command": command,
+            "args": args,
+        }
     else:
-        logger.warning("MCP 工具 %s 无 server_url/server_command", tool.name)
+        logger.warning("MCP 工具 %s 无 command/server_url", tool.name)
         return []
-    try:
-        import asyncio
-        async def _load():
-            client = MultiServerMCPClient(servers)
-            tools = await client.get_tools()
-            if tool_filter:
-                tools = [t for t in tools if t.name in tool_filter]
-            return tools
-        tools = asyncio.get_event_loop().run_until_complete(_load()) if asyncio.get_event_loop().is_running() else asyncio.run(_load())
-        logger.info("MCP 工具 %s 加载 %d 个", tool.name, len(tools))
+
+    async def _load():
+        client = MultiServerMCPClient(connections)
+        tools = await client.get_tools()
+        if tool_filter:
+            tools = [t for t in tools if t.name in tool_filter]
         return tools
+
+    try:
+        # build_agent 在 async 上下文里跑(astream_agent 内),用 ensure_future 安全获取工具
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            # 已在 event loop 内(正常情况)——同步等待不可行,用新线程跑
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as ex:
+                tools = ex.submit(lambda: asyncio.run(_load())).result(timeout=30)
+        else:
+            tools = asyncio.run(_load())
+        # 包一层:把 MCP 原始返回(可能含 text content 块)解包成字符串,给 agent 干净结果
+        wrapped = []
+        for t in tools:
+            wrapped.append(_unwrap_mcp_tool(t, tool.name))
+        logger.info("MCP 工具 %s 加载 %d 个", tool.name, len(wrapped))
+        return wrapped
     except Exception as e:
         logger.warning("MCP 工具 %s 加载失败:%s", tool.name, e)
         return []
+
+
+def _unwrap_mcp_tool(tool: BaseTool, source: str) -> BaseTool:
+    """包一层:把 MCP 返回的 content 块列表解包成干净字符串。
+
+    MCP 原始返回形如 [{type:'text', text:'7.0', id:'...'}],agent 需要干净的 '7.0'。
+    用 StructuredTool.from_function 重建工具(而非 monkey-patch _arun,会丢签名)。
+    """
+    def _unwrap(result):
+        if isinstance(result, list):
+            texts = []
+            for item in result:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    texts.append(item)
+            return "\n".join(texts) if texts else str(result)
+        return result
+
+    # 同步包装:用公共 invoke API(避免直接调 _run/_arun 的签名坑)
+    def _sync_run(**kwargs):
+        return _unwrap(tool.invoke(kwargs))
+
+    # 异步包装:用公共 ainvoke API(config 由 langgraph 框架管理)
+    async def _async_run(**kwargs):
+        return _unwrap(await tool.ainvoke(kwargs))
+
+    return StructuredTool.from_function(
+        func=_sync_run,
+        coroutine=_async_run,
+        name=tool.name,
+        description=tool.description,
+        args_schema=getattr(tool, "args_schema", None),
+    )
 
 
 # —— 入口:加载工具 ——

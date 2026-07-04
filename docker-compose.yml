@@ -51,6 +51,8 @@ services:
       - //var/run/docker.sock:/var/run/docker.sock
       # skill 文件系统(后端读写 SKILL.md + scripts/,同步进会话容器)
       - ./backend/skills:/app/skills
+      # poc 挂载(含 MCP server 示例,供 MCP 工具测试/参考)
+      - ./backend/poc:/app/poc
     ports:
       - "8000:8000"
     depends_on:
