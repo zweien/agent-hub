@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from app.auth import get_current_user, verify_token
+from app.auth import get_current_user, get_optional_user, verify_token
 from app.db import SessionLocal
 from app.models.session import Session
 from app.models.event import Event
@@ -167,7 +167,7 @@ async def get_artifact(
     session_id: str,
     filename: str,
     token: Optional[str] = Query(default=None),
-    user: Optional[dict] = Depends(get_current_user),
+    user: Optional[dict] = Depends(get_optional_user),
 ):
     """下载/预览单个 artifact。
 

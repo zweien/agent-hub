@@ -110,13 +110,20 @@ class SessionRegistry:
                 session_id=session_id, seq=state.next_seq,
                 type=event.get("type", "?"), payload=event, actor=actor,
             ))
-            # 同步更新 session 状态
+            # 同步更新 session 状态(§2.3 状态机)
             sess = db.get(Session, session_id)
             if sess:
                 if event["type"] == "done":
                     sess.status = "done"
-                elif event["type"] == "error":
+                elif event["type"] in ("error", "interrupted"):
+                    # 失败/中止 → interrupted(§5.5 暂停态,等用户 recover)
                     sess.status = "interrupted"
+                elif event["type"] == "action_required":
+                    # 工具前置确认(§5.4) → awaiting_user
+                    sess.status = "awaiting_user"
+                elif event["type"] == "takeover_begin":
+                    # 人机接管(§2.3 C1) → human_takeover
+                    sess.status = "human_takeover"
                 else:
                     sess.status = "running"
             db.commit()

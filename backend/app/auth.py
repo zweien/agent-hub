@@ -48,6 +48,21 @@ async def get_current_user(
     return verify_token(creds.credentials)
 
 
+async def get_optional_user(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> Optional[dict]:
+    """可选用户依赖:无/无效 Bearer 时返回 None(不抛),交由调用方走 query token 等备用鉴权。
+
+    用于 artifacts 下载/预览(?token= 供 <img src> 标签用,见 routes_sessions)。
+    """
+    if creds is None or not creds.credentials:
+        return None
+    try:
+        return verify_token(creds.credentials)
+    except HTTPException:
+        return None
+
+
 def require_role(*allowed_roles: str):
     """FastAPI 依赖工厂:要求角色在 allowed_roles 内,否则 403。"""
     async def _check(user: dict = Depends(get_current_user)) -> dict:
