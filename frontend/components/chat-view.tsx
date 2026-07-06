@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useChatSocket, type ChatMessage, type SandboxExec } from "@/hooks/use-chat-socket";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
+import { ArtifactsPanel } from "@/components/artifacts-panel";
 
 function buildWsUrl(token: string): string {
   if (typeof window === "undefined") return "ws://localhost:8000/ws/chat";
@@ -101,6 +102,22 @@ export function ChatView() {
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);
   const [mode, setLocalMode] = useState("standard");
+  // artifacts 刷新触发器:status 从 streaming→ready 时递增,提示面板拉新产物
+  const [artifactRefresh, setArtifactRefresh] = useState(0);
+  const prevStatus = useRef(status);
+  useEffect(() => {
+    if (prevStatus.current === "streaming" && status === "ready") {
+      setArtifactRefresh((k) => k + 1); // agent 完成一轮,可能产了新文件
+    }
+    prevStatus.current = status;
+  }, [status]);
+  // urlTransform:给 markdown 里的 /api/sessions/... 图片 URL 注入 token(<img> 不带 header)
+  const urlTransform = useCallback((url: string) => {
+    if (url.startsWith("/api/sessions/") && user) {
+      return `${url}?token=${encodeURIComponent(user.token)}`;
+    }
+    return url;
+  }, [user]);
   // §8 对话选配置(§1 闭环核心:A 配置 → B 使用)
   const [configs, setConfigs] = useState<AgentConfigBrief[]>([]);
   const [agentConfigId, setAgentConfigId] = useState<string>("");
@@ -142,13 +159,17 @@ export function ChatView() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full">
+      <div className="flex flex-1 flex-col min-w-0">
       {/* 接管/工作环境入口 */}
       {sandboxUrl && takeoverActive && (
-        <a href={sandboxUrl} target="_blank" rel="noreferrer"
-           className="flex items-center gap-2 bg-primary/10 px-4 py-2 text-sm text-primary hover:bg-primary/20">
+        <Button
+          variant="ghost"
+          className="h-auto justify-start rounded-none bg-primary/10 px-4 py-2 text-sm text-primary hover:bg-primary/20"
+          onClick={() => window.open(sandboxUrl, "_blank", "noopener,noreferrer")}
+        >
           <ExternalLinkIcon className="size-4" /> 已进入接管模式,点此打开工作环境(VSCode/终端)
-        </a>
+        </Button>
       )}
       <div className="flex items-center justify-between border-b px-4 py-2">
         <div className="flex items-center gap-2">
@@ -185,7 +206,7 @@ export function ChatView() {
                 {msg.sandboxExecs?.map((ex, i) => <SandboxExecCard key={`sx${i}`} exec={ex} />)}
                 <ConfirmBar msg={msg} onConfirm={confirm} />
                 <RecoveryBar msg={msg} onRecover={recover} />
-                {msg.content && <MessageResponse className="prose-chat">{msg.content}</MessageResponse>}
+                {msg.content && <MessageResponse className="prose-chat" urlTransform={urlTransform}>{msg.content}</MessageResponse>}
               </MessageContent>
             </Message>
           ))}
@@ -291,6 +312,9 @@ export function ChatView() {
         </form>
         <div className="mt-1 text-center text-xs text-muted-foreground">Agent Hub · 按 Enter 发送,Shift+Enter 换行</div>
       </div>
+      </div> {/* 关闭聊天列 */}
+      {/* 右侧产物面板(artifacts) */}
+      {user && <ArtifactsPanel sessionId={sessionId} token={user.token} refreshKey={artifactRefresh} />}
     </div>
   );
 }

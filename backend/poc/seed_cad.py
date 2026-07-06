@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Seed text-to-CAD agent:CAD 建模能力集成。
+
+前置:需先构建 CAD 镜像 → bash scripts/build-cad.sh
+用法:
+  cd backend
+  python poc/seed_cad.py
+
+创建:
+  - 2 个 Skill:cad(核心建模)、cad-viewer(几何预览)
+  - 1 个 SandboxTemplate:CAD 沙箱(agent-hub-cad 镜像,宽松硬件限制)
+  - 1 个 AgentConfig:CAD 设计助手(关联上述 skill + template)
+
+幂等:按 name upsert,可重复运行(更新内容,不重复创建)。
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+# 把 backend 根目录加入 sys.path,使 from app.xxx import 能工作
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, _BACKEND_ROOT)
+
+from app.db import SessionLocal         # noqa: E402
+from app.models.skill import Skill      # noqa: E402
+from app.models.sandbox_template import SandboxTemplate  # noqa: E402
+from app.models.agent_config import AgentConfig          # noqa: E402
+from app.sandbox_mgr import skill_store                  # noqa: E402
+
+
+# ============ Skill 内容 ============
+
+CAD_SKILL_CONTENT = """\
+# CAD 参数化建模(build123d)
+
+从自然语言或图片需求,用 build123d 生成参数化 CAD 模型,主输出 STEP。
+
+## 工作流
+
+1. **理解需求**:确认零件几何、尺寸、单位(默认 mm)、约束
+2. **写 build123d Python 代码**:用 build123d 的 BP(Builder Pattern)API 构建几何
+3. **导出 STEP**:调用 `cadpy` 辅助导出到 `/workspace/artifacts/<name>.step`
+4. **自检**:验证体积为正、几何有效(`part.is_valid()`)
+5. **可选导出**:按需导出 STL/GLB 到同目录
+6. **生成预览**:参考 cad-viewer skill 生成 PNG 快照
+
+## 脚本调用
+
+text-to-cad 仓库已装在 `/opt/text-to-cad`,核心脚本可直接调用:
+```bash
+cd /opt/text-to-cad/skills/cad && python scripts/step <参数>
+```
+或自己写 build123d 代码内联执行。
+
+## build123d 速查
+
+```python
+from build123d import Box, Cylinder, Mode, Axis, Plane
+from ocp_vscode import show  # 可选,交互预览
+
+# 基本体
+box = Box(100, 60, 30)        # 长宽高(mm)
+cyl = Cylinder(10, 50)        # 半径、高度
+# 布尔运算
+part = box - cyl               # 减(打孔)
+part = box + cyl               # 加(凸台)
+part = box & cyl               # 交
+# 导出 STEP
+from build123d.exporters3d import StepExporter
+with StepExporter(part, "/workspace/artifacts/part.step") as e:
+    e.write()
+# 自检
+print(f"体积 = {part.volume:.1f} mm³")
+assert part.volume > 0
+assert part.is_valid()
+```
+
+## 单位与坐标约定
+
+- 单位:**mm**(所有尺寸按毫米)
+- 基面:XY 平面,+Z 向上拉伸
+- 原点:零件几何中心或基准角,视需求
+
+## 常见 UAV 零件
+
+- 翼型肋板:用样条曲线 + 拉伸
+- 电机支架:Box + 圆柱布尔运算(电机孔、安装孔)
+- 电池舱:薄壁盒体(offset 面向内)
+- 起落架支架:扫掠或放样
+"""
+
+CAD_VIEWER_SKILL_CONTENT = """\
+# CAD 几何预览(cad-viewer)
+
+将 CAD 几何渲染为 PNG 快照,headless 模式(不依赖 X server,不弹窗)。
+
+## 工作流
+
+1. 先用 cad skill 生成 STEP 文件(或 build123d 对象)
+2. 用 playwright headless 渲染几何为 PNG
+3. 输出到 `/workspace/artifacts/preview.png`
+
+## 渲染方式
+
+### 方式 A:matplotlib 投影(最简,无需 CAD viewer 仓库)
+
+```python
+# 把 STEP 加载进 build123d,投影到 2D,matplotlib 存 PNG
+from build123d import import_step
+from build123d.exporters2d import matplotlib_svg
+import matplotlib
+matplotlib.use("Agg")  # headless
+import matplotlib.pyplot as plt
+
+part = import_step("/workspace/artifacts/part.step")
+# 投影到 XY
+svg = matplotlib_svg(part.faces_grouped(-part.location), "")
+with open("/workspace/artifacts/preview.svg", "w") as f:
+    f.write(svg)
+# 或直接多视角 PNG
+```
+
+### 方式 B:cad-viewer snapshot(需要 /opt/text-to-cad)
+
+```bash
+cd /opt/text-to-cad/skills/cad-viewer && python scripts/snapshot \
+    --input /workspace/artifacts/part.step \
+    --output /workspace/artifacts/preview.png
+```
+
+## 输出约定
+
+- 文件名固定为 `preview.png`(后端 artifacts 路由按名预览)
+- 尺寸 800×600 或更大,白底
+- 复杂零件可生成多视角
+
+## 注意
+
+- headless 渲染用 `matplotlib.use("Agg")`,不要用 TkAgg(会找 X server)
+- STEP 文件大时渲染慢,适当降采样
+"""
+
+
+# ============ Agent system_prompt ============
+
+CAD_AGENT_PROMPT = """\
+你是 UAV CAD 设计 agent,用 build123d 参数化建模,从自然语言描述生成可制造的 CAD 零件。
+
+## 硬约束(始终遵守)
+
+- 单位:mm(毫米)
+- 基面:XY 平面,Z 向上拉伸
+- 主输出:STEP 文件,写到 /workspace/artifacts/<name>.step
+- 附加输出:按需导出 STL/GLB 到 /workspace/artifacts/
+- 完成建模后:用 cad-viewer skill 生成 PNG 快照到 /workspace/artifacts/preview.png
+- 在回复里用 markdown 引用预览图:
+  ![预览](/api/sessions/{SESSION_ID}/artifacts/preview.png)
+  (把 {SESSION_ID} 替换为当前会话 ID,从环境变量 SESSION_ID 读取)
+- 自检:验证体积为正(`part.volume > 0`)、几何有效(`part.is_valid()`),不过关就修
+
+## 工作流
+
+1. 确认零件类型、关键尺寸、约束(不明确就问用户)
+2. 参考 cad skill 写 build123d Python 代码
+3. 在沙箱里执行,导出 STEP
+4. 自检几何
+5. 生成 PNG 预览
+6. 回复用户:简述设计 + 引用预览图 + 说明可在右侧"产物"面板下载 STEP
+
+工作流细节(build123d API、脚本调用、单位约定)参考 cad skill。
+"""
+
+
+# ============ upsert 辅助 ============
+
+def upsert_skill(db, name, description, content):
+    s = db.query(Skill).filter(Skill.name == name).first()
+    if s:
+        s.description = description
+        s.content = content
+        s.is_published = True
+        db.commit()
+        db.refresh(s)
+        verb = "更新"
+    else:
+        s = Skill(name=name, description=description, content=content,
+                  scripts=[], owner_id="admin", is_published=True)
+        db.add(s)
+        db.commit()
+        db.refresh(s)
+        verb = "创建"
+    # 同步到文件系统(session_runner 从这里读)
+    skill_store.save_skill_files(s.id, s.content, {}, name=s.name, description=s.description)
+    print(f"  [{verb}] Skill {name} → {s.id}")
+    return s
+
+
+def upsert_template(db, name, **fields):
+    t = db.query(SandboxTemplate).filter(SandboxTemplate.name == name).first()
+    if t:
+        for k, v in fields.items():
+            setattr(t, k, v)
+        db.commit()
+        db.refresh(t)
+        verb = "更新"
+    else:
+        t = SandboxTemplate(name=name, owner_id="admin", is_published=True, **fields)
+        db.add(t)
+        db.commit()
+        db.refresh(t)
+        verb = "创建"
+    print(f"  [{verb}] Template {name} → {t.id}")
+    return t
+
+
+def upsert_agent(db, name, **fields):
+    a = db.query(AgentConfig).filter(AgentConfig.name == name).first()
+    if a:
+        for k, v in fields.items():
+            setattr(a, k, v)
+        a.is_published = True
+        db.commit()
+        db.refresh(a)
+        verb = "更新"
+    else:
+        a = AgentConfig(name=name, owner_id="admin", is_published=True, **fields)
+        db.add(a)
+        db.commit()
+        db.refresh(a)
+        verb = "创建"
+    print(f"  [{verb}] Agent {name} → {a.id}")
+    return a
+
+
+# ============ 主流程 ============
+
+def main():
+    db = SessionLocal()
+    try:
+        print("=== Seed text-to-CAD agent ===\n")
+
+        # 检查 CAD 镜像是否已构建(温馨提示)
+        import docker
+        client = docker.from_env()
+        try:
+            client.images.get("agent-hub-cad:latest")
+        except Exception:
+            print("⚠️  警告:agent-hub-cad:latest 镜像未找到!")
+            print("   请先构建:bash scripts/build-cad.sh")
+            print("   (继续 seed,但启动 CAD 会话会失败直到镜像就绪)\n")
+
+        print("=== 创建 Skill ===")
+        cad_skill = upsert_skill(db, "cad",
+                                 "用 build123d 从自然语言生成参数化 CAD 模型,输出 STEP/STL/3MF/GLB。涉及 UAV 零件建模、翼型肋板、支架设计时使用。",
+                                 CAD_SKILL_CONTENT)
+        viewer_skill = upsert_skill(db, "cad-viewer",
+                                    "渲染 CAD 几何为 PNG 快照(headless 模式)。建模完成后生成预览图。",
+                                    CAD_VIEWER_SKILL_CONTENT)
+
+        print("\n=== 创建 SandboxTemplate ===")
+        tpl = upsert_template(db, "CAD 沙箱 (build123d/OCP)",
+                              base_image="agent-hub-cad:latest",
+                              pip_packages=[],      # 全在镜像里
+                              env_vars={},
+                              cpu_limit=4.0,        # 宽松限制(乙方案)
+                              mem_limit="8g",
+                              gpu_count=0,          # CAD 纯 CPU
+                              shm_size="2g")
+
+        print("\n=== 创建 AgentConfig ===")
+        upsert_agent(db, "CAD 设计助手 (text-to-CAD)",
+                     system_prompt=CAD_AGENT_PROMPT,
+                     tools=[],                               # deepagents exec + skill 脚本够用
+                     skill_ids=[cad_skill.id, viewer_skill.id],
+                     sandbox_template_id=tpl.id,
+                     model="deepseek-v4-flash",              # 默认,可在配置里切强模型
+                     mode="standard")
+
+        print("\n=== 完成 ===")
+        print("✓ text-to-CAD agent 已就绪")
+        print("  前端 → Agent 配置页可看到 'CAD 设计助手 (text-to-CAD)'")
+        print("  开会话选择该配置,输入如 '画个 100mm 立方体导出 STEP' 即可")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()
