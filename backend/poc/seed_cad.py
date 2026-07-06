@@ -68,9 +68,8 @@ part = box - cyl               # 减(打孔)
 part = box + cyl               # 加(凸台)
 part = box & cyl               # 交
 # 导出 STEP
-from build123d.exporters3d import StepExporter
-with StepExporter(part, "/workspace/artifacts/part.step") as e:
-    e.write()
+from build123d.exporters3d import export_step
+export_step(part, "/workspace/artifacts/part.step")
 # 自检
 print(f"体积 = {part.volume:.1f} mm³")
 assert part.volume > 0
