@@ -279,13 +279,43 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
     # thread_id 关联 checkpointer:LangGraph 自动加载该 thread 的历史 messages,
     # 本轮只追加新用户消息(修复"对话无上下文"bug)。
     config = {"configurable": {"thread_id": session_id}} if session_id else None
+    # filesystem 工具集合(deepagents FilesystemMiddleware 注入,前端单独成类)
+    _FS_TOOLS = {"read_file", "ls", "write_file", "edit_file", "read_multiple_files", "str_replace"}
     try:
-        async for mode, payload in agent.astream(inputs, config=config, stream_mode=["messages", "updates"]):
+        async for mode, payload in agent.astream(inputs, config=config, stream_mode=["messages", "updates", "values"]):
             if mode == "messages":
                 chunk, _meta = payload
                 if isinstance(chunk, AIMessageChunk):
-                    if chunk.content:  # 文本 token 增量
-                        yield {"type": "token", "content": str(chunk.content)}
+                    # reasoning 路径①:content block type=="reasoning"(标准 langchain 推理模型)
+                    # reasoning 路径②:additional_kwargs.reasoning_content(DeepSeek 等非标准透传)
+                    ak = getattr(chunk, "additional_kwargs", {}) or {}
+                    rc = ak.get("reasoning_content") or ak.get("reasoning")
+                    if rc:
+                        yield {"type": "reasoning", "content": str(rc)}
+                    # 区分 content block 类型:推理模型的 content 是 list(含 reasoning/text block)
+                    if isinstance(chunk.content, list):
+                        for block in chunk.content:
+                            if not isinstance(block, dict):
+                                continue
+                            bt = block.get("type")
+                            if bt == "reasoning":
+                                r = block.get("reasoning") or block.get("text") or ""
+                                if r:
+                                    yield {"type": "reasoning", "content": str(r)}
+                            elif bt == "text":
+                                t = block.get("text", "")
+                                if t:
+                                    yield {"type": "token", "content": str(t)}
+                    elif isinstance(chunk.content, str) and chunk.content:
+                        yield {"type": "token", "content": chunk.content}
+            elif mode == "values":
+                # values 含完整 state;提取 deepagents 的 todos(计划进度,TodoListMiddleware)
+                todos = payload.get("todos") if isinstance(payload, dict) else None
+                if todos:
+                    yield {"type": "todos", "todos": [
+                        {"content": t.get("content", ""), "status": t.get("status", "pending")}
+                        for t in todos
+                    ]}
             elif mode == "updates":
                 # updates 的 payload 是 {"node_name": node_output} dict(多 stream_mode 下)
                 if isinstance(payload, dict):
@@ -298,9 +328,13 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                     for m in node_output.get("messages", []):
                         if getattr(m, "tool_calls", None):  # 工具调用开始
                             for tc in m.tool_calls:
-                                yield {"type": "tool_start", "name": tc.get("name", "?"), "args": tc.get("args", {})}
+                                name = tc.get("name", "?")
+                                yield {"type": "tool_start", "name": name, "args": tc.get("args", {}),
+                                       "is_subagent": name == "task",
+                                       "is_filesystem": name in _FS_TOOLS}
                         elif isinstance(m, ToolMessage):  # 工具结果
-                            yield {"type": "tool_end", "name": m.name, "content": str(m.content)[:1000]}
+                            yield {"type": "tool_end", "name": m.name, "content": str(m.content)[:1000],
+                                   "is_filesystem": m.name in _FS_TOOLS}
         yield {"type": "done"}
     except Exception as e:
         logger.exception("astream_agent 失败")

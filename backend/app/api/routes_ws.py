@@ -63,9 +63,9 @@ async def chat_ws(
     current_sid = session_id
     logger.info("WS 连接 user=%s session_id=%s", current_user.get("username"), current_sid or "(新建)")
 
-    # 重连:回放历史
+    # 重连:回放历史(提高上限,避免长会话刷新丢早期事件)
     if current_sid:
-        history = registry.get_history(current_sid)
+        history = registry.get_history(current_sid, limit=1000)
         if history:
             await ws.send_json({"type": "replay", "events": history})
 

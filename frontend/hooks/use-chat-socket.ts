@@ -8,8 +8,10 @@ export type WsEvent =
   | { type: "replay"; events: WsEvent[] }
   | { type: "message_in"; content: string }
   | { type: "token"; content: string }
-  | { type: "tool_start"; name: string; args?: Record<string, unknown> }
-  | { type: "tool_end"; name: string; content: string }
+  | { type: "reasoning"; content: string }
+  | { type: "todos"; todos: { content: string; status: "pending" | "in_progress" | "completed" }[] }
+  | { type: "tool_start"; name: string; args?: Record<string, unknown>; is_subagent?: boolean; is_filesystem?: boolean }
+  | { type: "tool_end"; name: string; content: string; is_filesystem?: boolean }
   | { type: "action_required"; action_id: string; tool: string; args: Record<string, unknown> }
   | { type: "action_resolved"; action_id: string; approved: boolean }
   | { type: "takeover_ready"; sandbox_url: string }
@@ -30,6 +32,15 @@ export interface ToolCall {
   args?: Record<string, unknown>;
   status: "running" | "done";
   result?: string;
+  /** deepagents 的 task 工具(子代理委派) */
+  is_subagent?: boolean;
+  /** deepagents FilesystemMiddleware 注入的文件操作工具 */
+  is_filesystem?: boolean;
+}
+
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
 }
 
 export interface SandboxExec {
@@ -45,6 +56,10 @@ export interface ChatMessage {
   content: string;
   tools: ToolCall[];
   sandboxExecs?: SandboxExec[];
+  /** 推理过程(累积;仅推理模型产生,当前 endpoint 可能无) */
+  reasoning?: string;
+  /** 计划进度(deepagents write_todos 快照,最新覆盖) */
+  todos?: TodoItem[];
   pendingConfirm?: { action_id: string; tool: string; args: Record<string, unknown> };
   interrupted?: { reason: string; action_id?: string };
 }
@@ -99,11 +114,21 @@ export function useChatSocket(url: string) {
             }
             const idx = rebuilt.findIndex((m) => m.id === aiId);
             rebuilt[idx] = { ...rebuilt[idx], content: rebuilt[idx].content + (ev as { content: string }).content };
+          } else if (ev.type === "reasoning") {
+            if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
+            const r = ev as { content: string };
+            const idx = rebuilt.findIndex((m) => m.id === aiId);
+            rebuilt[idx] = { ...rebuilt[idx], reasoning: (rebuilt[idx].reasoning || "") + r.content };
+          } else if (ev.type === "todos") {
+            if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
+            const td = ev as { todos: TodoItem[] };
+            const idx = rebuilt.findIndex((m) => m.id === aiId);
+            rebuilt[idx] = { ...rebuilt[idx], todos: td.todos };
           } else if (ev.type === "tool_start") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
-            const t = ev as { name: string; args?: Record<string, unknown> };
+            const t = ev as { name: string; args?: Record<string, unknown>; is_subagent?: boolean; is_filesystem?: boolean };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
-            rebuilt[idx] = { ...rebuilt[idx], tools: [...rebuilt[idx].tools, { id: nextId(), name: t.name, args: t.args, status: "running" }] };
+            rebuilt[idx] = { ...rebuilt[idx], tools: [...rebuilt[idx].tools, { id: nextId(), name: t.name, args: t.args, status: "running", is_subagent: t.is_subagent, is_filesystem: t.is_filesystem }] };
           } else if (ev.type === "tool_end") {
             const t = ev as { name: string; content: string };
             // 配对最近的同名 running 工具
@@ -143,6 +168,36 @@ export function useChatSocket(url: string) {
         });
         break;
       }
+      case "reasoning": {
+        // 推理过程累积(仅推理模型产生;与 token 同样追加到当前 AI 消息)
+        setMessages((prev) => {
+          let aiId = currentAiId.current;
+          let next = prev;
+          if (!aiId || !prev.find((m) => m.id === aiId)) {
+            aiId = nextId();
+            currentAiId.current = aiId;
+            next = [...prev, { id: aiId, from: "assistant" as const, content: "", tools: [] }];
+          }
+          return next.map((m) =>
+            m.id === aiId ? { ...m, reasoning: (m.reasoning || "") + event.content } : m
+          );
+        });
+        break;
+      }
+      case "todos": {
+        // 计划进度(deepagents write_todos 快照;最新覆盖)
+        setMessages((prev) => {
+          let aiId = currentAiId.current;
+          let next = prev;
+          if (!aiId || !prev.find((m) => m.id === aiId)) {
+            aiId = nextId();
+            currentAiId.current = aiId;
+            next = [...prev, { id: aiId, from: "assistant" as const, content: "", tools: [] }];
+          }
+          return next.map((m) => (m.id === aiId ? { ...m, todos: event.todos } : m));
+        });
+        break;
+      }
       case "sandbox_exec": {
         // agent 在沙箱执行命令(§5.1):追加到当前 AI 消息
         setMessages((prev) => {
@@ -174,7 +229,7 @@ export function useChatSocket(url: string) {
           }
           return next.map((m) =>
             m.id === aiId
-              ? { ...m, tools: [...m.tools, { id: tid, name: event.name, args: event.args, status: "running" as const }] }
+              ? { ...m, tools: [...m.tools, { id: tid, name: event.name, args: event.args, status: "running" as const, is_subagent: event.is_subagent, is_filesystem: event.is_filesystem }] }
               : m
           );
         });

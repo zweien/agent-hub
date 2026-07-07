@@ -8,8 +8,12 @@ import {
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import { Reasoning } from "@/components/ai-elements/reasoning";
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible, CollapsibleTrigger, CollapsibleContent,
+} from "@/components/ui/collapsible";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
@@ -20,8 +24,9 @@ import {
 import {
   ArrowUpIcon, ExternalLinkIcon, RefreshCwIcon, SkipForwardIcon,
   XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon, PanelRightIcon,
+  CircleIcon, CircleDotIcon, CheckCircleIcon, FileIcon, ChevronDownIcon, UsersIcon,
 } from "lucide-react";
-import { useChatSocket, type ChatMessage, type SandboxExec } from "@/hooks/use-chat-socket";
+import { useChatSocket, type ChatMessage, type SandboxExec, type TodoItem } from "@/hooks/use-chat-socket";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
 import { useUI } from "@/contexts/ui-context";
 import { ArtifactsPanel } from "@/components/artifacts-panel";
@@ -43,6 +48,89 @@ function ToolCard({ tool }: { tool: ChatMessage["tools"][number] }) {
         {tool.result && <ToolOutput output={tool.result} errorText={undefined} />}
       </ToolContent>
     </Tool>
+  );
+}
+
+function TodoPanel({ todos }: { todos: TodoItem[] }) {
+  if (!todos || todos.length === 0) return null;
+  const done = todos.filter((t) => t.status === "completed").length;
+  return (
+    <div className="my-1.5 w-full rounded-lg border bg-muted/30 p-2.5 text-xs">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-foreground">
+        <span>📋 计划进度</span>
+        <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+          {done}/{todos.length}
+        </span>
+      </div>
+      <ul className="space-y-1">
+        {todos.map((t, i) => (
+          <li key={i} className="flex items-start gap-1.5">
+            {t.status === "completed" ? (
+              <CheckCircleIcon className="mt-0.5 size-3.5 shrink-0 text-green-600" />
+            ) : t.status === "in_progress" ? (
+              <CircleDotIcon className="mt-0.5 size-3.5 shrink-0 animate-pulse text-blue-600" />
+            ) : (
+              <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className={t.status === "completed" ? "text-muted-foreground line-through" : "text-foreground"}>
+              {t.content}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SubagentCard({ tool }: { tool: ChatMessage["tools"][number] }) {
+  // deepagents 的 task 工具:args 含 description / subagent_type
+  const desc = (tool.args as { description?: string })?.description || "";
+  const saType = (tool.args as { subagent_type?: string })?.subagent_type || "子代理";
+  return (
+    <div className="my-1.5 w-full rounded-lg border border-violet-200 bg-violet-50/50 p-2.5 text-xs">
+      <div className="mb-1 flex items-center gap-1.5 font-medium text-violet-700">
+        <UsersIcon className="size-3.5 shrink-0" />
+        <span>子代理 · {saType}</span>
+        {tool.status === "running" && (
+          <span className="ml-auto text-violet-500">委派执行中…</span>
+        )}
+      </div>
+      {desc && <div className="mb-1 text-foreground">{desc}</div>}
+      {tool.result && (
+        <div className="mt-1.5 max-h-40 overflow-auto rounded bg-white/60 p-1.5 font-mono text-muted-foreground">
+          {tool.result.slice(0, 800)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FileSystemToolGroup({ tools }: { tools: ChatMessage["tools"] }) {
+  // 把 is_filesystem 的工具折叠成"文件操作"组
+  const fsTools = tools.filter((t) => t.is_filesystem);
+  if (fsTools.length === 0) return null;
+  return (
+    <Collapsible className="my-1.5 w-full rounded-lg border bg-muted/20 text-xs">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted/40">
+        <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="font-medium text-foreground">文件操作</span>
+        <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">{fsTools.length}</span>
+        <ChevronDownIcon className="ml-auto size-3.5 text-muted-foreground" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-1 border-t p-2">
+          {fsTools.map((t, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <span className="font-mono text-purple-600">{t.name}</span>
+              {t.status === "running" && <span className="text-muted-foreground">…</span>}
+              {t.result && (
+                <span className="truncate text-muted-foreground">→ {t.result.slice(0, 60)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -204,10 +292,23 @@ export function ChatView() {
           {messages.map((msg) => (
             <Message key={msg.id} from={msg.from}>
               <MessageContent>
-                {msg.tools.map((t) => <ToolCard key={t.id} tool={t} />)}
+                {/* ① 推理过程(可折叠;仅推理模型产生) */}
+                {msg.from === "assistant" && (msg.reasoning || status === "streaming") && (
+                  <Reasoning content={msg.reasoning || ""} isStreaming={!!msg.reasoning && status === "streaming" && !msg.content} />
+                )}
+                {/* ② 计划进度(deepagents write_todos) */}
+                {msg.todos && msg.todos.length > 0 && <TodoPanel todos={msg.todos} />}
+                {/* ③ 子代理委派(deepagents task 工具,独立卡片) */}
+                {msg.tools.filter((t) => t.is_subagent).map((t) => <SubagentCard key={t.id} tool={t} />)}
+                {/* ④ 文件操作(deepagents FilesystemMiddleware,折叠组) */}
+                <FileSystemToolGroup tools={msg.tools} />
+                {/* ⑤ 普通业务工具(run_aero 等) */}
+                {msg.tools.filter((t) => !t.is_subagent && !t.is_filesystem).map((t) => <ToolCard key={t.id} tool={t} />)}
+                {/* ⑥ 沙箱命令执行 */}
                 {msg.sandboxExecs?.map((ex, i) => <SandboxExecCard key={`sx${i}`} exec={ex} />)}
                 <ConfirmBar msg={msg} onConfirm={confirm} />
                 <RecoveryBar msg={msg} onRecover={recover} />
+                {/* ⑦ 最终文本回复 */}
                 {msg.content && <MessageResponse className="prose-chat" urlTransform={urlTransform}>{msg.content}</MessageResponse>}
               </MessageContent>
             </Message>
