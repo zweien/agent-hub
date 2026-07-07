@@ -19,10 +19,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ArrowUpIcon, ExternalLinkIcon, RefreshCwIcon, SkipForwardIcon,
-  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon,
+  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon, PanelRightIcon,
 } from "lucide-react";
 import { useChatSocket, type ChatMessage, type SandboxExec } from "@/hooks/use-chat-socket";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
+import { useUI } from "@/contexts/ui-context";
 import { ArtifactsPanel } from "@/components/artifacts-panel";
 
 function buildWsUrl(token: string): string {
@@ -96,6 +97,7 @@ function RecoveryBar({ msg, onRecover }: { msg: ChatMessage; onRecover: (a: stri
 
 export function ChatView() {
   const { user } = useAuth();
+  const { artifactsCollapsed, toggleArtifacts } = useUI();
   const wsUrl = user ? buildWsUrl(user.token) : "";
   const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation } = useChatSocket(wsUrl);
   const [input, setInput] = useState("");
@@ -313,8 +315,22 @@ export function ChatView() {
         <div className="mt-1 text-center text-xs text-muted-foreground">Agent Hub · 按 Enter 发送,Shift+Enter 换行</div>
       </div>
       </div> {/* 关闭聊天列 */}
-      {/* 右侧产物面板(artifacts) */}
-      {user && <ArtifactsPanel sessionId={sessionId} token={user.token} refreshKey={artifactRefresh} />}
+      {/* 右侧产物面板(artifacts):可折叠 */}
+      {user && artifactsCollapsed && (
+        <aside className="flex w-12 shrink-0 flex-col items-center border-l bg-background py-2">
+          <Button size="icon-sm" variant="ghost" onClick={toggleArtifacts} title="展开产物面板">
+            <PanelRightIcon className="size-4" />
+          </Button>
+        </aside>
+      )}
+      {user && !artifactsCollapsed && (
+        <ArtifactsPanel
+          sessionId={sessionId}
+          token={user.token}
+          refreshKey={artifactRefresh}
+          onCollapse={toggleArtifacts}
+        />
+      )}
     </div>
   );
 }

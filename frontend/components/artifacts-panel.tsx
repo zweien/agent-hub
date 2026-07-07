@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { API_BASE } from "@/contexts/auth-context";
-import { DownloadIcon, FileIcon, ImageIcon, PackageIcon, RefreshCwIcon } from "lucide-react";
+import { DownloadIcon, FileIcon, ImageIcon, PackageIcon, PanelRightCloseIcon, RefreshCwIcon } from "lucide-react";
 
 interface Artifact {
   name: string;
@@ -33,10 +33,11 @@ function typeLabel(type: string): string {
   return type || "文件";
 }
 
-export function ArtifactsPanel({ sessionId, token, refreshKey }: {
+export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
   sessionId: string | null;
   token: string;
   refreshKey?: number;
+  onCollapse?: () => void;
 }) {
   const [items, setItems] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(false);
@@ -91,9 +92,16 @@ export function ArtifactsPanel({ sessionId, token, refreshKey }: {
             <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{items.length}</span>
           )}
         </div>
-        <Button size="icon-sm" variant="ghost" onClick={fetchArtifacts} disabled={loading}>
-          <RefreshCwIcon className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button size="icon-sm" variant="ghost" onClick={fetchArtifacts} disabled={loading} title="刷新">
+            <RefreshCwIcon className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+          </Button>
+          {onCollapse && (
+            <Button size="icon-sm" variant="ghost" onClick={onCollapse} title="收起产物面板">
+              <PanelRightCloseIcon className="size-3.5" />
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto p-2">

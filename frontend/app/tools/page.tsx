@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
-import { Sidebar } from "@/components/sidebar";
+import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { PlusIcon, ArrowLeftIcon, TrashIcon } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
@@ -76,9 +76,7 @@ export default function ToolsPage() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 overflow-auto">
+    <AppShell>
         <div className="mx-auto max-w-3xl p-6">
           <div className="mb-6 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -124,8 +122,7 @@ export default function ToolsPage() {
             <ToolForm tool={editing} isBuilder={isBuilder} onSave={saveTool} onCancel={() => { setShowForm(false); setEditing(null); }} />
           )}
         </div>
-      </main>
-    </div>
+    </AppShell>
   );
 }
 

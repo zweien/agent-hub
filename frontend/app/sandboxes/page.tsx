@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
-import { Sidebar } from "@/components/sidebar";
+import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { ArrowLeftIcon, TrashIcon, ExternalLinkIcon } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
@@ -59,9 +59,7 @@ export default function SandboxesPage() {
   if (loading || !user || user.role !== "admin") return <div className="flex h-screen items-center justify-center text-muted-foreground">需要管理员权限</div>;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
-      <Sidebar />
-      <main className="flex-1 overflow-auto">
+    <AppShell>
         <div className="mx-auto max-w-4xl p-6">
           <div className="mb-6 flex items-center gap-3">
             <Link href="/" className="text-muted-foreground hover:text-foreground"><ArrowLeftIcon className="size-5" /></Link>
@@ -105,7 +103,6 @@ export default function SandboxesPage() {
             ))}
           </div>
         </div>
-      </main>
-    </div>
+    </AppShell>
   );
 }
