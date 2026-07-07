@@ -18,12 +18,19 @@ from pathlib import Path
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from deepagents import create_deep_agent
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.config import get_settings
 from app.tools.aero import run_aero
 from app.sandbox_mgr.manager import get_manager
 
 logger = logging.getLogger("aero_agent")
+
+# 会话级上下文 checkpointer(§2.4 会话独立于连接)。
+# 模块级单例:跨 build_agent 调用复用,使同一 thread_id 的 messages 自动累积。
+# 进程内存储(与 SessionRegistry._sessions 同生命周期);后端重启后丢失,
+# 与 V1 §2.4 边界一致("V1 不做会话数天级长期挂起")。
+_checkpointer = MemorySaver()
 
 
 @tool
@@ -142,6 +149,7 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
         model=llm,
         tools=tools,
         system_prompt=system,
+        checkpointer=_checkpointer,
         **extra_kwargs,
     )
 
@@ -248,8 +256,11 @@ def run(user_input: str) -> str:
     return final_text or "(agent 未产生最终文本)"
 
 
-async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = ""):
+async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = "", session_id: str = ""):
     """异步流式运行 agent(WebSocket §2.3 用),产出事件 dict。
+
+    session_id: 会话标识 → LangGraph thread_id。配 checkpointer 后,
+    同一 thread_id 的 messages 跨轮自动累积(上下文不丢)。
 
     产出的事件类型(供 WebSocket 推送):
       {"type":"token","content":"..."}        LLM 文本 token 增量
@@ -265,8 +276,11 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
     from langchain_core.messages import AIMessageChunk, ToolMessage
     agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt)
     inputs = {"messages": [("user", user_input)]}
+    # thread_id 关联 checkpointer:LangGraph 自动加载该 thread 的历史 messages,
+    # 本轮只追加新用户消息(修复"对话无上下文"bug)。
+    config = {"configurable": {"thread_id": session_id}} if session_id else None
     try:
-        async for mode, payload in agent.astream(inputs, stream_mode=["messages", "updates"]):
+        async for mode, payload in agent.astream(inputs, config=config, stream_mode=["messages", "updates"]):
             if mode == "messages":
                 chunk, _meta = payload
                 if isinstance(chunk, AIMessageChunk):

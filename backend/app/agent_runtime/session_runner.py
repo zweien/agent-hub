@@ -184,7 +184,7 @@ class SessionRegistry:
                 # 记录用户消息事件
                 self._persist_event(session_id, state,
                                     {"type": "message_in", "content": user_input}, actor="user")
-                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=cfg_prompt):
+                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=cfg_prompt, session_id=session_id):
                     # 接管门控(§2.3 C1):被 clear 时在此挂起,直到交还(set)
                     await state.resume_event.wait()
                     # 熔断计数(§5.4):token 不计入轮数;tool_start 才算一轮
