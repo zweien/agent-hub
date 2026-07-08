@@ -27,6 +27,7 @@ redis-data/
 # IDE/OS
 .vscode/
 .idea/
+.zcode/
 .DS_Store
 Thumbs.db
 
