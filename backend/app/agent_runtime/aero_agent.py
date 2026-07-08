@@ -98,6 +98,9 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
         base_url=s.llm_base_url, api_key=s.llm_api_key, model=use_model,
         max_tokens=s.llm_max_tokens, temperature=0.3,
         streaming=True,  # token 级流式更稳(§2.3)
+        # 暴露上下文窗口给 SummarizationMiddleware(create_deep_agent 默认挂):
+        # 有 max_input_tokens 时走 fraction(trigger=85%/keep=10%);无则 170k fixed。
+        profile={"max_input_tokens": s.llm_context_window},
     )
     # 注册内置工具(供工厂识别)
     from app.agent_runtime.tool_factory import register_builtin, load_tools
@@ -242,11 +245,15 @@ print(f'OPTIMAL: AR={{best[0]}} L/D={{best[1]}}')
     return r.stdout if r.exit_code == 0 else f"扫描失败(exit {r.exit_code}): {r.stdout}"
 
 
-def run(user_input: str) -> str:
-    """运行一次 agent 会话(同步,POST /chat 用),返回最终文本。"""
+def run(user_input: str, session_id: str = "") -> str:
+    """运行一次 agent 会话(同步,POST /chat 用),返回最终文本。
+
+    session_id:传入则关联 checkpointer/summarization thread_id(压缩历史正确落盘)。
+    """
     agent = build_agent()
     final_text = ""
-    for chunk in agent.stream({"messages": [("user", user_input)]}, stream_mode="values"):
+    config = {"configurable": {"thread_id": session_id}} if session_id else None
+    for chunk in agent.stream({"messages": [("user", user_input)]}, config=config, stream_mode="values"):
         msg = chunk["messages"][-1]
         if hasattr(msg, "content") and msg.content and not isinstance(msg, str):
             role = getattr(msg, "type", "?")
@@ -281,6 +288,8 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
     config = {"configurable": {"thread_id": session_id}} if session_id else None
     # filesystem 工具集合(deepagents FilesystemMiddleware 注入,前端单独成类)
     _FS_TOOLS = {"read_file", "ls", "write_file", "edit_file", "read_multiple_files", "str_replace"}
+    # 记录上次 summarization 事件,检测变化(压缩发生时通知前端)
+    last_se = None
     try:
         async for mode, payload in agent.astream(inputs, config=config, stream_mode=["messages", "updates", "values"]):
             if mode == "messages":
@@ -316,6 +325,20 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                         {"content": t.get("content", ""), "status": t.get("status", "pending")}
                         for t in todos
                     ]}
+                # 检测上下文压缩(deepagents SummarizationMiddleware 写 _summarization_event)
+                se = payload.get("_summarization_event") if isinstance(payload, dict) else None
+                if se and se != last_se:
+                    last_se = se
+                    # summary_message 是 HumanMessage,取其 content 文本
+                    sm = se.get("summary_message")
+                    summary_text = ""
+                    if sm is not None:
+                        summary_text = str(getattr(sm, "content", sm) or "")[:300]
+                    yield {
+                        "type": "context_compacted",
+                        "summary": summary_text,
+                        "file_path": se.get("file_path", ""),
+                    }
             elif mode == "updates":
                 # updates 的 payload 是 {"node_name": node_output} dict(多 stream_mode 下)
                 if isinstance(payload, dict):

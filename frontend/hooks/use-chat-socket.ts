@@ -10,6 +10,7 @@ export type WsEvent =
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
   | { type: "todos"; todos: { content: string; status: "pending" | "in_progress" | "completed" }[] }
+  | { type: "context_compacted"; summary: string; file_path?: string }
   | { type: "tool_start"; name: string; args?: Record<string, unknown>; is_subagent?: boolean; is_filesystem?: boolean }
   | { type: "tool_end"; name: string; content: string; is_filesystem?: boolean }
   | { type: "action_required"; action_id: string; tool: string; args: Record<string, unknown> }
@@ -60,6 +61,8 @@ export interface ChatMessage {
   reasoning?: string;
   /** 计划进度(deepagents write_todos 快照,最新覆盖) */
   todos?: TodoItem[];
+  /** 上下文已压缩(deepagents SummarizationMiddleware 触发后的提示) */
+  compacted?: { summary: string; file_path?: string };
   pendingConfirm?: { action_id: string; tool: string; args: Record<string, unknown> };
   interrupted?: { reason: string; action_id?: string };
 }
@@ -124,6 +127,11 @@ export function useChatSocket(url: string) {
             const td = ev as { todos: TodoItem[] };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
             rebuilt[idx] = { ...rebuilt[idx], todos: td.todos };
+          } else if (ev.type === "context_compacted") {
+            if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
+            const c = ev as { summary: string; file_path?: string };
+            const idx = rebuilt.findIndex((m) => m.id === aiId);
+            rebuilt[idx] = { ...rebuilt[idx], compacted: { summary: c.summary, file_path: c.file_path } };
           } else if (ev.type === "tool_start") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
             const t = ev as { name: string; args?: Record<string, unknown>; is_subagent?: boolean; is_filesystem?: boolean };
@@ -195,6 +203,22 @@ export function useChatSocket(url: string) {
             next = [...prev, { id: aiId, from: "assistant" as const, content: "", tools: [] }];
           }
           return next.map((m) => (m.id === aiId ? { ...m, todos: event.todos } : m));
+        });
+        break;
+      }
+      case "context_compacted": {
+        // 上下文压缩(deepagents SummarizationMiddleware 触发):标记当前 AI 消息
+        setMessages((prev) => {
+          let aiId = currentAiId.current;
+          let next = prev;
+          if (!aiId || !prev.find((m) => m.id === aiId)) {
+            aiId = nextId();
+            currentAiId.current = aiId;
+            next = [...prev, { id: aiId, from: "assistant" as const, content: "", tools: [] }];
+          }
+          return next.map((m) =>
+            m.id === aiId ? { ...m, compacted: { summary: event.summary, file_path: event.file_path } } : m
+          );
         });
         break;
       }

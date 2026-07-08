@@ -21,7 +21,7 @@ router = APIRouter(tags=["chat"])
 async def chat(req: ChatRequest) -> ChatResponse:
     t0 = time.time()
     try:
-        reply = run_agent(req.message)
+        reply = run_agent(req.message, session_id=req.session_id or "")
     except ValueError as e:
         # 配置缺失等
         raise HTTPException(status_code=500, detail=str(e))

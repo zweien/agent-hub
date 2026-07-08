@@ -16,7 +16,8 @@ class HealthResponse(BaseModel):
 class ChatRequest(BaseModel):
     """POST /chat 请求。"""
     message: str = Field(..., min_length=1, description="用户消息")
-    # 后续可加 session_id / agent_id(本轮简化为无状态单 agent)
+    # 可选 session_id:传入则关联 checkpointer/summarization thread_id(压缩历史正确落盘)
+    session_id: str | None = Field(default=None, description="会话 id(可选,关联上下文压缩)")
 
 
 class ChatResponse(BaseModel):

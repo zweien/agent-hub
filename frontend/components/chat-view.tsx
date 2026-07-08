@@ -183,6 +183,35 @@ function RecoveryBar({ msg, onRecover }: { msg: ChatMessage; onRecover: (a: stri
   );
 }
 
+function CompactedBar({ msg }: { msg: ChatMessage }) {
+  // deepagents SummarizationMiddleware 触发:上下文已压缩为摘要
+  if (!msg.compacted) return null;
+  return (
+    <Collapsible className="my-1.5 w-full rounded-lg border border-blue-200 bg-blue-50/40 text-xs">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 hover:bg-blue-50/60">
+        <FileIcon className="size-3.5 shrink-0 text-blue-600" />
+        <span className="font-medium text-blue-700">⏺ 上下文已压缩</span>
+        <span className="text-muted-foreground">历史对话已摘要,节省 token</span>
+        <ChevronDownIcon className="ml-auto size-3.5 text-muted-foreground" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="border-t border-blue-100 px-2.5 py-2 text-muted-foreground">
+          {msg.compacted.summary && (
+            <p className="mb-1.5 whitespace-pre-wrap break-words leading-relaxed text-foreground">
+              {msg.compacted.summary}
+            </p>
+          )}
+          {msg.compacted.file_path && (
+            <p className="font-mono text-[11px] text-muted-foreground">
+              完整历史已落盘:{msg.compacted.file_path}(可用 read_file 恢复)
+            </p>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 export function ChatView() {
   const { user } = useAuth();
   const { artifactsCollapsed, toggleArtifacts } = useUI();
@@ -296,6 +325,8 @@ export function ChatView() {
                 {msg.from === "assistant" && (msg.reasoning || status === "streaming") && (
                   <Reasoning content={msg.reasoning || ""} isStreaming={!!msg.reasoning && status === "streaming" && !msg.content} />
                 )}
+                {/* 上下文压缩提示(deepagents SummarizationMiddleware 触发) */}
+                <CompactedBar msg={msg} />
                 {/* ② 计划进度(deepagents write_todos) */}
                 {msg.todos && msg.todos.length > 0 && <TodoPanel todos={msg.todos} />}
                 {/* ③ 子代理委派(deepagents task 工具,独立卡片) */}
