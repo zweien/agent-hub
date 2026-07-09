@@ -131,5 +131,15 @@ def init_db():
                 owner_id="admin", is_published=True,
             ))
             db.commit()
+
+        # Seed text-to-CAD agent(按 name 幂等 upsert:2 skill + 1 template + 1 agent)。
+        # 镜像 agent-hub-cad:latest 需预先构建(scripts/build-cad.sh);未构建时 seed
+        # 仍落库(agent 配置先就绪),仅启动 CAD 会话会失败直到镜像就绪。
+        # try/except:CAD seed 失败不阻断主启动(气动助手已就绪)。
+        try:
+            from poc.seed_cad import main as seed_cad_main
+            seed_cad_main()
+        except Exception as e:
+            logger.warning("CAD agent seed 失败(不阻断启动):%s", e)
     finally:
         db.close()
