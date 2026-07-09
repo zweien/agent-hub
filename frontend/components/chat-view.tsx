@@ -315,7 +315,7 @@ export function ChatView() {
         <ConversationContent className="mx-auto w-full max-w-3xl px-4">
           {messages.length === 0 && (
             <ConversationEmptyState className="pt-20 text-center text-muted-foreground">
-              机翼气动优化助手 · 输入需求开始对话
+              输入需求开始对话
             </ConversationEmptyState>
           )}
           {messages.map((msg) => (
