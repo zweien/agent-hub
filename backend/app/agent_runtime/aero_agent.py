@@ -106,17 +106,19 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
     from app.agent_runtime.tool_factory import register_builtin, load_tools
     register_builtin("run_aero_tool", run_aero_tool)
     register_builtin("run_sweep_in_sandbox", _sweep_with_confirm)
+    register_builtin("run_in_sandbox", run_in_sandbox)
 
     # 工具加载(§8 工具选择 + 统一工具管理):
     #   enabled_tools 含内置名(run_aero_tool)+ 用户工具 id(tool_xxx)
     #   工厂按 type 实例化:内置直给 / python/bash→sandbox exec / web→HTTP / mcp→client
-    if enabled_tools:
-        tools = load_tools(list(enabled_tools))
+    #   显式配置(非 None):严格按 enabled_tools 加载(空 set = 该 agent 不要这些工具,
+    #     如 CAD agent 配 tools=[] 不该带气动工具)。None=未指定,用气动默认。
+    if enabled_tools is None:
+        # 未指定(向后兼容):默认气动工具
+        tools = [run_aero_tool, _sweep_with_confirm]
     else:
-        # 空=全部内置(向后兼容)
-        tools = [run_aero_tool, _sweep_with_confirm]
-    if not tools:  # 至少留一个,避免空工具报错
-        tools = [run_aero_tool, _sweep_with_confirm]
+        # 显式配置(含空 set):严格按配置,不默认补气动
+        tools = load_tools(list(enabled_tools)) if enabled_tools else []
     # system prompt(§8:配置面传入则用配置的,否则用默认气动)
     system = system_prompt or (
         "你是机翼气动优化助手。你能:\n"
@@ -147,6 +149,12 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
             extra_kwargs["skills"] = ["/workspace/skills"]
             logger.info("build_agent 挂载 skills+filesystem backend(容器 %s, session=%s)",
                         state.container_name, state.session_id)
+            # 容器就绪 → 挂 run_in_sandbox(执行工具),让 agent/子代理能跑脚本。
+            # deepagents FilesystemMiddleware 只给 read/write/ls,无 exec;CAD 等
+            # 需执行脚本(python cube.py)的 agent 必须有此工具。父 agent 有则
+            # 子代理经 default_tools 继承(SubAgent 文档:未指定 tools 则继承父)。
+            if run_in_sandbox not in tools:
+                tools = [*tools, run_in_sandbox]
         except Exception as e:
             logger.warning("挂载 skills backend 失败(agent 仍可跑,但无 skill):%s", e)
 
@@ -201,6 +209,32 @@ async def _sweep_with_confirm(area: float, ar_start: float, ar_end: float, ar_st
             return f"扫描已跳过(此前失败:{str(e)[:80]})。请基于已有信息继续。"
         else:  # end:返回结束提示,让 agent 自然收尾→done(不 raise,避免再触发 interrupted)
             return "用户已选择结束本次操作。请简短确认即可。"
+
+
+@tool
+def run_in_sandbox(command: str) -> str:
+    """在会话沙箱容器内执行 shell 命令(如运行 Python 脚本、装包、查看文件)。
+
+    用于:执行写到 /workspace 的脚本(python script.py)、检查环境、
+    运行建模/渲染命令等。命令在隔离的会话容器内跑,工作目录 /workspace。
+
+    args:
+      command: 要执行的 shell 命令(如 'python /workspace/scripts/cube.py')
+    返回:命令的 stdout(末尾附 exit code);失败信息含 stderr。
+    """
+    from app.agent_runtime.session_runner import get_current_session
+    state = get_current_session()
+    if not state or not state.session_id:
+        return "错误:无活跃会话沙箱(无法执行命令)"
+    mgr = get_manager()
+    try:
+        r = mgr.exec(state.session_id, command, workdir="/workspace")
+    except Exception as e:
+        return f"执行异常: {e}"
+    out = r.stdout or ""
+    if r.stderr:
+        out += f"\n[stderr]\n{r.stderr}"
+    return f"{out}\n[exit {r.exit_code}]"
 
 
 def _run_sweep_raw(session_id: str, area: float, ar_start: float, ar_end: float, ar_step: float) -> str:
