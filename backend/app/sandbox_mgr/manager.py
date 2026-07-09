@@ -49,10 +49,24 @@ class SandboxManager:
 
     def __init__(self, image: str = "ghcr.io/agent-infra/sandbox:latest", on_exec: Optional[ExecObserver] = None):
         self.image = image
-        self.on_exec = on_exec
+        # exec observer 按 session_id 路由(单例 manager 服务多会话,每会话写各自事件流)。
+        # on_exec 参数保留向后兼容(若有,作为无 session 注册时的默认回调)。
+        self._exec_observers: dict[str, ExecObserver] = {}
+        self._default_observer: Optional[ExecObserver] = on_exec
         self._client = docker.from_env()
         # session_id → {"container_id", "name"}
         self._sessions: dict[str, dict] = {}
+
+    def register_exec_observer(self, session_id: str, cb: ExecObserver) -> None:
+        """注册某会话的 exec observer(每次该会话 exec 调用 cb,写 sandbox_exec 事件 §5.1)。
+
+        取代旧的单一 on_exec 字段:单例 manager 服务多会话,每会话需独立 observer。
+        """
+        self._exec_observers[session_id] = cb
+
+    def unregister_exec_observer(self, session_id: str) -> None:
+        """注销会话 observer(会话结束/容器回收时调,防泄漏)。"""
+        self._exec_observers.pop(session_id, None)
 
     def _container_for(self, session_id: str):
         """取会话对应的容器对象。"""
@@ -188,9 +202,11 @@ class SandboxManager:
             exit_code=int(exit_code), stdout=stdout, stderr=stderr,
             duration_s=round(duration, 3), command=command,
         )
-        if self.on_exec is not None:
+        # observer 按 session_id 路由(每会话写各自事件流);无注册则用默认(向后兼容)
+        cb = self._exec_observers.get(session_id) or self._default_observer
+        if cb is not None:
             try:
-                self.on_exec(result)
+                cb(result)
             except Exception:
                 logger.debug("on_exec 回调异常(已忽略)", exc_info=True)
         logger.info("exec[%s] exit=%d %.3fs | %s", session_id, exit_code, duration, command[:80])

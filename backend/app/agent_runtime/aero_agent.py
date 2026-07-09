@@ -43,7 +43,7 @@ def run_sweep_in_sandbox(area: float, ar_start: float, ar_end: float, ar_step: f
     import uuid
     ephemeral_sid = "eph_" + uuid.uuid4().hex[:12]
     try:
-        return _run_sweep_raw(ephemeral_sid, None, area, ar_start, ar_end, ar_step)
+        return _run_sweep_raw(ephemeral_sid, area, ar_start, ar_end, ar_step)
     finally:
         try:
             get_manager().release(ephemeral_sid, destroy=True)
@@ -136,7 +136,9 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
         try:
             from app.sandbox_mgr.docker_backend import DockerContainerBackend
             from app.sandbox_mgr.manager import get_manager as _gm
-            mgr = _gm(on_exec=state.__dict__.get("_exec_observer"))
+            # observer 已在 session_runner._ensure_container_and_skills 按会话注册,
+            # 单例 manager 按 session_id 路由,此处不再传 on_exec(旧单值已废弃)。
+            mgr = _gm()
             backend = DockerContainerBackend(mgr, state.session_id)
             # 把 backend 传给 create_deep_agent:它会把默认的 FilesystemMiddleware 和
             # SkillsMiddleware 都接到【我的容器 backend】,路径空间统一(/workspace/skills/)。
@@ -171,7 +173,7 @@ async def _sweep_with_confirm(area: float, ar_start: float, ar_end: float, ar_st
         import uuid
         ephemeral_sid = "eph_" + uuid.uuid4().hex[:12]
         try:
-            return _run_sweep_raw(ephemeral_sid, None, **args)
+            return _run_sweep_raw(ephemeral_sid, **args)
         finally:
             try:
                 get_manager().release(ephemeral_sid, destroy=True)
@@ -187,38 +189,25 @@ async def _sweep_with_confirm(area: float, ar_start: float, ar_end: float, ar_st
         args = result["args"]  # 用户可能改了参数
     # 执行 + 失败捕获(§5.5):工具失败→interrupted,等用户 recover 决策
     try:
-        return _run_sweep_raw(state.session_id, _make_exec_observer(state.session_id), **args)
+        return _run_sweep_raw(state.session_id, **args)
     except Exception as e:
         # 触发失败暂停:写 interrupted + 暂停等 recover 决策
         decision = await registry.request_failure_pause(
             state.session_id, "run_sweep_in_sandbox", f"{type(e).__name__}: {str(e)[:200]}")
         action = decision.get("action", "end")
         if action == "retry":
-            return _run_sweep_raw(state.session_id, _make_exec_observer(state.session_id), **args)  # 重试一次
+            return _run_sweep_raw(state.session_id, **args)  # 重试一次
         elif action == "skip":
             return f"扫描已跳过(此前失败:{str(e)[:80]})。请基于已有信息继续。"
         else:  # end:返回结束提示,让 agent 自然收尾→done(不 raise,避免再触发 interrupted)
             return "用户已选择结束本次操作。请简短确认即可。"
 
 
-def _make_exec_observer(session_id: str):
-    """构造 sandbox exec 回调:把每次 exec 结果写进事件流(§2.5 sandbox_exec / §5.1 可回放)。
-
-    agent_runtime 经 registry 持久化(不直接 import 业务层),守 §0 边界。
-    """
-    from app.agent_runtime.session_runner import registry
-
-    def _observe(result):
-        registry.persist_sandbox_exec(session_id, result)
-
-    return _observe
-
-
-def _run_sweep_raw(session_id: str, _exec_observer, area: float, ar_start: float, ar_end: float, ar_step: float) -> str:
+def _run_sweep_raw(session_id: str, area: float, ar_start: float, ar_end: float, ar_step: float) -> str:
     """实际执行 sandbox 扫描(会话级容器版)。
 
     session_id: 会话标识(决定用哪个容器);无会话上下文时传临时 id。
-    _exec_observer: 可选,每次 exec 调用以持久化 sandbox_exec 事件(§5.1)。
+    exec observer 由 session_runner 按会话注册(manager 按 session_id 路由),此处不再传。
     """
     sweep_code = f"""
 import sys; sys.path.insert(0, '/home/gem')
@@ -234,7 +223,7 @@ while ar <= {ar_end}+1e-9:
 for ar,ld,cl in rows: print(f'AR={{ar}} L/D={{ld}} CL={{cl}}')
 print(f'OPTIMAL: AR={{best[0]}} L/D={{best[1]}}')
 """
-    mgr = get_manager(on_exec=_exec_observer)
+    mgr = get_manager()
     mgr.acquire(session_id)  # 确保容器在(会话级,首条消息已起;临时路径在此起)
     # aerosandbox 已预装进自定义 sandbox 镜像(避免每次 pip install 编译耗时/OOM)。
     # 保留一行快速校验(预装则 instant,未预装则补装——降级兼容)。

@@ -382,9 +382,10 @@ class SessionRegistry:
         沙箱模板(grilling):若有 sandbox_template_id,用模板的 base_image/硬件/包;否则全局默认。
         """
         from app.sandbox_mgr.manager import get_manager
-        # 存 exec observer 到 state,供 build_agent 取用(挂 skills middleware 时传给容器 backend)
-        state.__dict__["_exec_observer"] = self._make_exec_callback(session_id)
-        mgr = get_manager(on_exec=state.__dict__["_exec_observer"])
+        # 注册该会话的 exec observer(写 sandbox_exec 事件 §5.1)。
+        # 单例 manager 按 session_id 路由 observer(修旧 bug:单值 on_exec 只首次生效)。
+        mgr = get_manager()
+        mgr.register_exec_observer(session_id, self._make_exec_callback(session_id))
         state.last_activity_at = time.time()
         try:
             if not state.container_name:
@@ -468,10 +469,13 @@ class SessionRegistry:
     def _release_container(self, session_id: str, destroy: bool = True) -> None:
         """回收会话容器(空闲超时/取消时)。"""
         from app.sandbox_mgr.manager import get_manager
+        mgr = get_manager()
         try:
-            get_manager().release(session_id, destroy=destroy)
+            mgr.release(session_id, destroy=destroy)
         except Exception as e:
             logger.warning("回收容器失败 session=%s:%s", session_id, e)
+        # 注销 observer(防 _exec_observers dict 随会话累积泄漏)
+        mgr.unregister_exec_observer(session_id)
 
     def get_container_url(self, session_id: str) -> str:
         """取会话容器的对外 URL(接管 §2.3 用)。"""
