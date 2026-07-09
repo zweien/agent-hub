@@ -125,6 +125,11 @@ class SandboxManager:
             "device_requests": device_requests,
             "publish_all_ports": True,  # 接管 §2.3:容器内服务对外可访问
             "tty": True, "stdin_open": True,
+            # Chromium 命名空间沙箱所需(AIO Sandbox 镜像官方要求):
+            # 非特权容器内 Chromium setuid 沙箱需 seccomp=unconfined + SYS_ADMIN,
+            # 否则 zygote FATAL "Operation not permitted" → browser 面板一直 reconnecting。
+            "security_opt": ["seccomp=unconfined"],
+            "cap_add": ["SYS_ADMIN"],
             # 共享 pip 缓存卷:每会话独立容器,但 pip 下载的包复用
             "volumes": {"agent-hub-pip-cache": {"bind": "/root/.cache/pip", "mode": "rw"}},
         }
