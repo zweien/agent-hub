@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { API_BASE } from "@/contexts/auth-context";
-import { DownloadIcon, FileIcon, ImageIcon, PackageIcon, PanelRightCloseIcon, RefreshCwIcon } from "lucide-react";
+import {
+  FileTree, FileTreeFile, FileTreeFolder, FileTreeIcon, FileTreeName, FileTreeActions,
+} from "@/components/ai-elements/file-tree";
+import {
+  DownloadIcon, FileIcon, ImageIcon, PackageIcon, PanelRightCloseIcon, RefreshCwIcon,
+} from "lucide-react";
 
 interface Artifact {
-  name: string;
+  name: string;      // 相对 /workspace 的路径,可能含子目录(如 "out/wing.step")
   size: number;
   mtime: number;
   type: string;
@@ -22,15 +27,74 @@ function formatSize(bytes: number): string {
 }
 
 function TypeIcon({ type }: { type: string }) {
-  if (IMAGE_TYPES.includes(type)) return <ImageIcon className="size-3.5 text-blue-500" />;
-  if (CAD_TYPES.includes(type)) return <PackageIcon className="size-3.5 text-purple-500" />;
-  return <FileIcon className="size-3.5 text-muted-foreground" />;
+  if (IMAGE_TYPES.includes(type)) return <ImageIcon className="size-4 text-blue-500" />;
+  if (CAD_TYPES.includes(type)) return <PackageIcon className="size-4 text-purple-500" />;
+  return <FileIcon className="size-4 text-muted-foreground" />;
 }
 
-function typeLabel(type: string): string {
-  if (IMAGE_TYPES.includes(type)) return "图片";
-  if (CAD_TYPES.includes(type)) return "CAD";
-  return type || "文件";
+// —— flat 路径列表 → 嵌套树(FileTreeFolder/FileTreeFile 的声明式结构)——
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  artifact?: Artifact;       // 文件节点挂原始 artifact
+  children: Map<string, TreeNode>;
+}
+
+function buildTree(items: Artifact[]): TreeNode[] {
+  const root: TreeNode = { name: "", path: "", isDir: true, children: new Map() };
+  for (const a of items) {
+    const segs = a.name.split("/").filter(Boolean);
+    let cur = root;
+    segs.forEach((seg, i) => {
+      const isLast = i === segs.length - 1;
+      const childPath = segs.slice(0, i + 1).join("/");
+      let node = cur.children.get(seg);
+      if (!node) {
+        node = { name: seg, path: childPath, isDir: !isLast, children: new Map() };
+        cur.children.set(seg, node);
+      }
+      if (isLast) { node.isDir = false; node.artifact = a; }
+      cur = node;
+    });
+  }
+  // 目录优先,再按名字排序;文件按 mtime 已由后端排好(list 是 mtime desc),
+  // 但树内同级重组后失去顺序,这里按 name 排序保证稳定。
+  const sortNodes = (nodes: TreeNode[]): TreeNode[] => {
+    const arr = [...nodes.values()].sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;  // 目录在前
+      return a.name.localeCompare(b.name);
+    });
+    for (const n of arr) if (n.isDir) sortNodes([...n.children.values()]);
+    return arr;
+  };
+  return sortNodes([...root.children.values()]);
+}
+
+// 递归渲染树节点
+function renderNodes(nodes: TreeNode[], downloadUrl: (n: string) => string): React.ReactNode {
+  return nodes.map((n) => {
+    if (n.isDir) {
+      return (
+        <FileTreeFolder key={n.path} name={n.name} path={n.path}>
+          {renderNodes([...n.children.values()], downloadUrl)}
+        </FileTreeFolder>
+      );
+    }
+    const a = n.artifact!;
+    return (
+      <FileTreeFile key={n.path} path={n.path} name={n.name} icon={<TypeIcon type={a.type} />}>
+        <FileTreeIcon><TypeIcon type={a.type} /></FileTreeIcon>
+        <FileTreeName>{n.name}</FileTreeName>
+        <span className="ml-1 text-[10px] text-muted-foreground/70">{formatSize(a.size)}</span>
+        <FileTreeActions>
+          <a href={downloadUrl(n.path)} download={n.name} title="下载" className="text-muted-foreground hover:text-foreground">
+            <DownloadIcon className="size-3.5" />
+          </a>
+        </FileTreeActions>
+      </FileTreeFile>
+    );
+  });
 }
 
 export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
@@ -42,6 +106,8 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
   const [items, setItems] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 选中预览(图片类 inline 预览)
+  const [selected, setSelected] = useState<string | null>(null);
 
   const fetchArtifacts = useCallback(async () => {
     if (!sessionId) return;
@@ -65,12 +131,7 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
     }
   }, [sessionId, token]);
 
-  // sessionId 变化 + refreshKey 变化时拉取
-  useEffect(() => {
-    fetchArtifacts();
-  }, [fetchArtifacts, refreshKey]);
-
-  // 轮询(5s,容器运行时自动刷新新产物)
+  useEffect(() => { fetchArtifacts(); }, [fetchArtifacts, refreshKey]);
   useEffect(() => {
     if (!sessionId) return;
     const t = setInterval(fetchArtifacts, 5000);
@@ -79,8 +140,9 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
 
   const downloadUrl = (name: string) =>
     `${API_BASE}/sessions/${sessionId}/artifacts/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
-  const previewUrl = (name: string) =>
-    `${API_BASE}/sessions/${sessionId}/artifacts/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
+
+  const tree = useMemo(() => buildTree(items), [items]);
+  const selectedArtifact = items.find((a) => a.name === selected);
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l bg-background">
@@ -114,43 +176,41 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
         {error && (
           <div className="py-4 text-center text-xs text-red-500">{error}</div>
         )}
-        <div className="space-y-2">
-          {items.map((a) => (
-            <div key={a.name} className="rounded-lg border p-2">
-              <div className="flex items-start gap-2">
-                <div className="mt-0.5 shrink-0">
-                  <TypeIcon type={a.type} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-xs font-medium" title={a.name}>{a.name}</div>
-                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span className="rounded bg-muted px-1 py-0.5">{typeLabel(a.type)}</span>
-                    <span>{formatSize(a.size)}</span>
-                  </div>
-                </div>
-              </div>
-              {/* 图片类型:缩略图 */}
-              {IMAGE_TYPES.includes(a.type) && (
-                <a href={previewUrl(a.name)} target="_blank" rel="noreferrer" className="mt-2 block">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={previewUrl(a.name)}
-                    alt={a.name}
-                    className="w-full rounded border bg-muted/30"
-                    loading="lazy"
-                  />
-                </a>
-              )}
-              {/* 下载按钮 */}
-              <a href={downloadUrl(a.name)} download={a.name} className="mt-2 block">
-                <Button size="sm" variant="outline" className="w-full">
-                  <DownloadIcon className="size-3" /> 下载
-                </Button>
-              </a>
-            </div>
-          ))}
-        </div>
+        {items.length > 0 && (
+          <FileTree
+            onSelect={(p) => setSelected(p)}
+            selectedPath={selected || undefined}
+            className="text-sm"
+          >
+            {renderNodes(tree, downloadUrl)}
+          </FileTree>
+        )}
       </div>
+
+      {/* 选中文件的预览区(图片 inline;其余仅显示文件信息) */}
+      {selectedArtifact && (
+        <div className="border-t p-2">
+          <div className="mb-1 flex items-center gap-1.5">
+            <TypeIcon type={selectedArtifact.type} />
+            <span className="truncate font-mono text-xs" title={selectedArtifact.name}>{selectedArtifact.name}</span>
+          </div>
+          {IMAGE_TYPES.includes(selectedArtifact.type) ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={downloadUrl(selectedArtifact.name)}
+              alt={selectedArtifact.name}
+              className="w-full rounded border bg-muted/30"
+              loading="lazy"
+            />
+          ) : (
+            <a href={downloadUrl(selectedArtifact.name)} download={selectedArtifact.name}>
+              <Button size="sm" variant="outline" className="w-full">
+                <DownloadIcon className="size-3" /> 下载 {formatSize(selectedArtifact.size)}
+              </Button>
+            </a>
+          )}
+        </div>
+      )}
     </aside>
   );
 }
