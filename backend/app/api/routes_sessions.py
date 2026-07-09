@@ -21,8 +21,11 @@ from app.models.event import Event
 logger = logging.getLogger("api.sessions")
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-# artifacts 在容器内的固定目录
-ARTIFACTS_DIR = "/workspace/artifacts"
+# artifacts 扫描根:整个 /workspace(agent 用 write_file 自由选路径写,
+# 不强制写 /workspace/artifacts/,故扫整个工作区,排除 skills 目录)。
+ARTIFACTS_ROOT = "/workspace"
+# 扫描时排除的子目录(skills 是能力包,非产物)
+_ARTIFACTS_EXCLUDE_DIRS = {"skills"}
 
 # 文件扩展名 → Content-Type 映射(图片 inline 显示,3D/CAD 文件触发下载)
 _CONTENT_TYPES = {
@@ -167,9 +170,10 @@ async def list_artifacts(
     session_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """列出会话沙箱 artifacts 目录下的所有产物。
+    """列出会话沙箱 /workspace 下的所有产物文件(递归,排除 skills 目录)。
 
-    返回 [{name, size, mtime}]。owner 校验沿用 session 级。
+    返回 [{name, size, mtime, type}],name 为相对 /workspace 的路径
+    (如 "report.md" 或 "out/wing.step")。owner 校验沿用 session 级。
     """
     db = SessionLocal()
     try:
@@ -177,26 +181,35 @@ async def list_artifacts(
     finally:
         db.close()
     container = _get_container(session_id)
-    # ls 取文件名+大小+时间,用 \t 分隔方便解析
-    result = container.exec_run(
-        ["bash", "-lc", f'ls -lt --time-style=+%s "{ARTIFACTS_DIR}" 2>/dev/null | tail -n +2'],
+    # find 递归列文件,-printf 输出 "相对路径\t大小\tmtime",排除 skills 目录。
+    # 用 -mindepth 1 避免把根目录自身列出;路径用 %P(相对起点)作 name。
+    excludes = " ".join(f'-path {ARTIFACTS_ROOT}/{d} -prune -o' for d in _ARTIFACTS_EXCLUDE_DIRS)
+    cmd = (
+        f'find "{ARTIFACTS_ROOT}" -mindepth 1 {excludes} '
+        f'-type f -printf "%P\\t%s\\t%T@\\n" 2>/dev/null'
     )
+    result = container.exec_run(["bash", "-lc", cmd])
     out = (result.output.decode() if isinstance(result.output, bytes) else str(result.output)).strip()
     items = []
     for line in out.splitlines():
-        parts = line.split()
-        if len(parts) < 6:
+        line = line.strip()
+        if not line:
             continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        name, size_s, mtime_s = parts[0], parts[1], parts[2]
         try:
-            size = int(parts[4])
-            mtime = int(parts[5])
-            name = " ".join(parts[6:])
-        except (ValueError, IndexError):
+            size = int(size_s)
+            mtime = int(float(mtime_s))
+        except ValueError:
             continue
         if not name:
             continue
         ext = os.path.splitext(name)[1].lower()
         items.append({"name": name, "size": size, "mtime": mtime, "type": ext.lstrip(".") or "file"})
+    # 按修改时间降序(最新产物在前)
+    items.sort(key=lambda x: x["mtime"], reverse=True)
     return items
 
 
@@ -211,10 +224,10 @@ async def get_artifact(
 
     鉴权双模式:Authorization header(JWT)或 ?token=(供 <img src=...> 用)。
     按 .ext 设 Content-Type:图片 inline 显示,STEP/STL 触发下载。
+    filename 为相对 /workspace 的路径(如 "report.md" 或 "out/wing.step")。
     """
-    # 防路径穿越:只取文件名
-    filename = os.path.basename(filename)
-    if not filename:
+    # 防路径穿越:拒绝绝对路径 / .. 段,只允许相对 /workspace 的子路径
+    if not filename or filename.startswith("/") or ".." in filename.split("/"):
         raise HTTPException(400, "无效文件名")
 
     resolved_user = _resolve_user(user, token)
@@ -226,8 +239,10 @@ async def get_artifact(
 
     container = _get_container(session_id)
     # base64 读出文件内容(兼容二进制,参考 docker_backend.py download_files)
+    # filename 已校验无 .. / 非绝对,拼接到 ARTIFACTS_ROOT 下
+    target = f"{ARTIFACTS_ROOT}/{filename}"
     result = container.exec_run(
-        ["bash", "-lc", f'base64 "{ARTIFACTS_DIR}/{filename}" 2>/dev/null'],
+        ["bash", "-lc", f'base64 "{target}" 2>/dev/null'],
     )
     b64 = (result.output.decode() if isinstance(result.output, bytes) else str(result.output))
     b64 = b64.replace("\n", "").replace("\r", "").strip()
@@ -240,9 +255,15 @@ async def get_artifact(
 
     ext = os.path.splitext(filename)[1].lower()
     content_type, inline = _CONTENT_TYPES.get(ext, ("application/octet-stream", False))
-    headers = {}
-    if not inline:
-        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-    else:
-        headers["Content-Disposition"] = f'inline; filename="{filename}"'
+    # Content-Disposition 文件名用 basename(避免路径斜杠),非 ASCII 用 RFC 5987
+    # filename*=UTF-8 编码(latin-1 header 编不了中文,会 UnicodeEncodeError)。
+    disp_name = os.path.basename(filename)
+    try:
+        disp_name.encode("latin-1")
+        disp = f'filename="{disp_name}"'
+    except UnicodeEncodeError:
+        from urllib.parse import quote
+        disp = f"filename*=UTF-8''{quote(disp_name)}"
+    disposition_type = "attachment" if not inline else "inline"
+    headers = {"Content-Disposition": f"{disposition_type}; {disp}"}
     return Response(content=raw, media_type=content_type, headers=headers)
