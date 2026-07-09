@@ -304,10 +304,14 @@ export function ChatView() {
       .then(setConversations)
       .catch(() => {});
   }, [user, sessionId, status]);
-  // urlTransform:给 markdown 里的 /api/sessions/... 图片 URL 注入 token(<img> 不带 header)
+  // urlTransform:把 markdown 里的 /api/sessions/... 图片 URL 改写成后端绝对 URL + token
+  // (<img> 不带 Authorization header,需走 ?token= 双模式鉴权)。
+  // 后端实际路径是 /sessions/{id}/artifacts/...(无 /api 前缀),且跨端口(8000),
+  // 故拼成 API_BASE 绝对地址,否则相对路径打到 Next(3000)会 404。
   const urlTransform = useCallback((url: string) => {
     if (url.startsWith("/api/sessions/") && user) {
-      return `${url}?token=${encodeURIComponent(user.token)}`;
+      const path = url.slice("/api".length);  // /api/sessions/... → /sessions/...
+      return `${API_BASE}${path}?token=${encodeURIComponent(user.token)}`;
     }
     return url;
   }, [user]);

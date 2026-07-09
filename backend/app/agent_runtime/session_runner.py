@@ -203,7 +203,15 @@ class SessionRegistry:
                 # 记录用户消息事件
                 self._persist_event(session_id, state,
                                     {"type": "message_in", "content": user_input}, actor="user")
-                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=cfg_prompt, session_id=session_id):
+                # 注入真实 session_id 到 system prompt:CAD 等 agent 的 prompt 含
+                # {SESSION_ID} 占位符(用于 markdown 图片引用),替换为当前会话 id,
+                # 避免 agent 读不到环境变量而幻觉编错 session id(导致图片 404)。
+                # 用新变量 effective_prompt 避免给闭包里的 cfg_prompt 赋值触发
+                # UnboundLocalError(Python 闭包内赋值会使变量变 local)。
+                effective_prompt = cfg_prompt
+                if cfg_prompt and "{SESSION_ID}" in cfg_prompt:
+                    effective_prompt = cfg_prompt.replace("{SESSION_ID}", session_id)
+                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=effective_prompt, session_id=session_id):
                     # 接管门控(§2.3 C1):被 clear 时在此挂起,直到交还(set)
                     await state.resume_event.wait()
                     # 熔断计数(§5.4):token 不计入轮数;tool_start 才算一轮

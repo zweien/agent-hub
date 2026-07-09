@@ -154,9 +154,9 @@ CAD_AGENT_PROMPT = """\
 - 主输出:STEP 文件,写到 /workspace/artifacts/<name>.step
 - 附加输出:按需导出 STL/GLB 到 /workspace/artifacts/
 - 完成建模后:用 cad-viewer skill 生成 PNG 快照到 /workspace/artifacts/preview.png
-- 在回复里用 markdown 引用预览图:
-  ![预览](/api/sessions/{SESSION_ID}/artifacts/preview.png)
-  (把 {SESSION_ID} 替换为当前会话 ID,从环境变量 SESSION_ID 读取)
+- 在回复里用 markdown 引用预览图(路径固定写法,{SESSION_ID} 占位符由系统自动替换为当前会话 ID):
+  ![预览](/api/sessions/{SESSION_ID}/artifacts/artifacts/preview.png)
+  (文件在 /workspace/artifacts/preview.png,API 路径含两层 artifacts)
 - 自检:验证体积为正(`part.volume > 0`)、几何有效(`part.is_valid()`),不过关就修
 
 ## 工作流
