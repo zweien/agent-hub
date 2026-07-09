@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
-import { ArrowLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronRightIcon, MessageSquareIcon } from "lucide-react";
 
 // —— 类型(与后端 events 投影对应)——
 interface SessionBrief {
@@ -121,10 +122,17 @@ export default function SessionsPage() {
                 <div className="text-sm text-muted-foreground">
                   {detail?.title || activeId} · {detail?.status} · {detail?.events.length || 0} 条事件
                 </div>
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={hideTokens} onChange={(e) => setHideTokens(e.target.checked)} />
-                  隐藏 token 流
-                </label>
+                <div className="flex items-center gap-3">
+                  <Link href={`/chat?session=${activeId}`}>
+                    <Button size="sm" variant="outline">
+                      <MessageSquareIcon className="size-3.5" /> 继续对话
+                    </Button>
+                  </Link>
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={hideTokens} onChange={(e) => setHideTokens(e.target.checked)} />
+                    隐藏 token 流
+                  </label>
+                </div>
               </div>
               <div className="space-y-1.5">
                 {shownEvents.map((e) => {

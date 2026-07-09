@@ -152,7 +152,7 @@ export default function DashboardPage() {
                 return (
                   <Link
                     key={s.id}
-                    href="/sessions"
+                    href={`/chat?session=${s.id}`}
                     className="flex items-center gap-3 rounded-lg border p-3 transition-colors hover:border-primary/40 hover:bg-accent/30"
                   >
                     <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: meta.color }} />

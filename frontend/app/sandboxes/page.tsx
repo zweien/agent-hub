@@ -85,7 +85,7 @@ export default function SandboxesPage() {
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       会话{" "}
-                      <Link href="/sessions" className="font-mono text-primary hover:underline" title="在会话回放中查看">
+                      <Link href={`/chat?session=${s.session_id}`} className="font-mono text-primary hover:underline" title="回到该会话的对话">
                         {s.session_id.slice(0, 20)}
                       </Link>
                       {" · "}{s.title || "(无标题)"} · 用户 {s.owner || "?"}

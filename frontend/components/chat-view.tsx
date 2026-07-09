@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Conversation,
   ConversationContent,
@@ -31,9 +32,12 @@ import { useAuth, API_BASE } from "@/contexts/auth-context";
 import { useUI } from "@/contexts/ui-context";
 import { ArtifactsPanel } from "@/components/artifacts-panel";
 
-function buildWsUrl(token: string): string {
+function buildWsUrl(token: string, sessionId?: string | null): string {
   if (typeof window === "undefined") return "ws://localhost:8000/ws/chat";
-  return `ws://${window.location.hostname}:8000/ws/chat?token=${encodeURIComponent(token)}`;
+  let url = `ws://${window.location.hostname}:8000/ws/chat?token=${encodeURIComponent(token)}`;
+  // 带 session_id 连接 → 后端回放历史 + 订阅实时流(会话恢复 §2.4)
+  if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`;
+  return url;
 }
 
 interface AgentConfigBrief { id: string; name: string; model: string; mode: string; tools: string[] }
@@ -215,8 +219,15 @@ function CompactedBar({ msg }: { msg: ChatMessage }) {
 export function ChatView() {
   const { user } = useAuth();
   const { artifactsCollapsed, toggleArtifacts } = useUI();
-  const wsUrl = user ? buildWsUrl(user.token) : "";
-  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation } = useChatSocket(wsUrl);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // 会话恢复(§2.4):URL ?session=xxx 携带要恢复的会话 id。
+  // 用 ref 快照"本组件生命周期内 WS 绑定的 session"——只在新对话/挂载时改,
+  // 避免 session_started 同步 URL 时 sessionParam 变化触发 WS 重连循环。
+  const sessionParam = searchParams.get("session");
+  const wsSessionRef = useRef<string | null>(sessionParam);
+  const wsUrl = user ? buildWsUrl(user.token, wsSessionRef.current) : "";
+  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation } = useChatSocket(wsUrl, wsSessionRef.current);
   const [input, setInput] = useState("");
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);
@@ -251,6 +262,16 @@ export function ChatView() {
     const t = setInterval(poll, 15000);
     return () => { cancelled = true; clearInterval(t); };
   }, [user, sessionId]);
+  // 会话恢复-URL 同步:新会话首条消息后(session_started→sessionId 变化),
+  // 把 ?session=xxx 补进 URL,使刷新/复制链接可恢复。replace 不入历史栈。
+  // wsSessionRef 同步,确保后续 WS 重连(如断网)仍带同一 session。
+  useEffect(() => {
+    if (sessionId && sessionId !== sessionParam) {
+      wsSessionRef.current = sessionId;
+      router.replace(`/chat?session=${sessionId}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
   // urlTransform:给 markdown 里的 /api/sessions/... 图片 URL 注入 token(<img> 不带 header)
   const urlTransform = useCallback((url: string) => {
     if (url.startsWith("/api/sessions/") && user) {
@@ -337,7 +358,7 @@ export function ChatView() {
         </div>
         {/* 新对话:仅非流式且已有消息时显示 */}
         {status !== "streaming" && messages.length > 0 && (
-          <Button size="sm" variant="ghost" onClick={() => newConversation()}>
+          <Button size="sm" variant="ghost" onClick={() => { newConversation(); wsSessionRef.current = null; router.replace("/chat"); }}>
             <PlusIcon className="size-3.5" /> 新对话
           </Button>
         )}

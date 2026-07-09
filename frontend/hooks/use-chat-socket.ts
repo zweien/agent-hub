@@ -3,9 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // ===== WS 事件类型(与后端协议对应) =====
+// 历史事件(get_history 返回):{seq,type,payload,actor};字段值在 payload 内。
+export interface HistoryEvent {
+  seq: number;
+  type: string;
+  payload?: Record<string, unknown>;
+  actor?: string | null;
+}
 export type WsEvent =
   | { type: "session_started"; session_id: string }
-  | { type: "replay"; events: WsEvent[] }
+  | { type: "replay"; events: HistoryEvent[] }
   | { type: "message_in"; content: string }
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
@@ -72,14 +79,15 @@ export type ConnStatus = "connecting" | "ready" | "streaming" | "error";
 let msgIdCounter = 0;
 const nextId = () => `m${++msgIdCounter}`;
 
-export function useChatSocket(url: string) {
+export function useChatSocket(url: string, initialSessionId?: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnStatus>("connecting");
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   const [takeoverActive, setTakeoverActive] = useState(false);
-  // 当前会话 id(从 session_started 事件捕获;新对话=重连不带 session_id)
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  // 当前会话 id:恢复场景从 URL ?session= 初始化(replay 不发 session_started),
+  // 新会话从 session_started 事件捕获;新对话=重连不带 session_id
+  const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
   // 当前 AI 消息 id(流式追加用)
   const currentAiId = useRef<string | null>(null);
 
@@ -104,11 +112,14 @@ export function useChatSocket(url: string) {
       case "replay": {
         // 重连回放(§2.4):把历史事件投影成消息列表。
         // token 合并到同一条 assistant 消息;tool_start/tool_end 配对;sandbox_exec 记录。
+        // 后端 get_history 返回 {seq,type,payload,actor};字段值在 payload 内,
+        // 故取 p = payload(兼容直接扁平的事件结构)。
         const rebuilt: ChatMessage[] = [];
         let aiId: string | null = null;
         for (const ev of event.events) {
+          const p = (ev as { payload?: Record<string, unknown> }).payload || ev;
           if (ev.type === "message_in") {
-            rebuilt.push({ id: nextId(), from: "user", content: (ev as { content: string }).content, tools: [] });
+            rebuilt.push({ id: nextId(), from: "user", content: String((p as { content?: string }).content ?? ""), tools: [] });
             aiId = null;
           } else if (ev.type === "token") {
             if (!aiId) {
@@ -116,29 +127,28 @@ export function useChatSocket(url: string) {
               rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] });
             }
             const idx = rebuilt.findIndex((m) => m.id === aiId);
-            rebuilt[idx] = { ...rebuilt[idx], content: rebuilt[idx].content + (ev as { content: string }).content };
+            rebuilt[idx] = { ...rebuilt[idx], content: rebuilt[idx].content + String((p as { content?: string }).content ?? "") };
           } else if (ev.type === "reasoning") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
-            const r = ev as { content: string };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
-            rebuilt[idx] = { ...rebuilt[idx], reasoning: (rebuilt[idx].reasoning || "") + r.content };
+            rebuilt[idx] = { ...rebuilt[idx], reasoning: (rebuilt[idx].reasoning || "") + String((p as { content?: string }).content ?? "") };
           } else if (ev.type === "todos") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
-            const td = ev as { todos: TodoItem[] };
+            const td = p as { todos: TodoItem[] };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
             rebuilt[idx] = { ...rebuilt[idx], todos: td.todos };
           } else if (ev.type === "context_compacted") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
-            const c = ev as { summary: string; file_path?: string };
+            const c = p as { summary: string; file_path?: string };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
             rebuilt[idx] = { ...rebuilt[idx], compacted: { summary: c.summary, file_path: c.file_path } };
           } else if (ev.type === "tool_start") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
-            const t = ev as { name: string; args?: Record<string, unknown>; is_subagent?: boolean; is_filesystem?: boolean };
+            const t = p as { name: string; args?: Record<string, unknown>; is_subagent?: boolean; is_filesystem?: boolean };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
             rebuilt[idx] = { ...rebuilt[idx], tools: [...rebuilt[idx].tools, { id: nextId(), name: t.name, args: t.args, status: "running", is_subagent: t.is_subagent, is_filesystem: t.is_filesystem }] };
           } else if (ev.type === "tool_end") {
-            const t = ev as { name: string; content: string };
+            const t = p as { name: string; content: string };
             // 配对最近的同名 running 工具
             for (let i = rebuilt.length - 1; i >= 0; i--) {
               const m = rebuilt[i];
@@ -151,7 +161,7 @@ export function useChatSocket(url: string) {
             }
           } else if (ev.type === "sandbox_exec") {
             if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
-            const s = ev as { command: string; exit_code: number; stdout: string; duration_s: number };
+            const s = p as { command: string; exit_code: number; stdout: string; duration_s: number };
             const idx = rebuilt.findIndex((m) => m.id === aiId);
             rebuilt[idx] = { ...rebuilt[idx], sandboxExecs: [...(rebuilt[idx].sandboxExecs || []), { command: s.command, exit_code: s.exit_code, stdout: s.stdout, duration_s: s.duration_s }] };
           }
