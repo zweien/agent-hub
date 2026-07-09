@@ -5,7 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon, PuzzleIcon,
-  MessageSquareIcon, WrenchIcon, ServerIcon, BoxesIcon,
+  MessageSquareIcon, WrenchIcon, ServerIcon, BoxesIcon, LayoutDashboardIcon,
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { useUI } from "@/contexts/ui-context";
@@ -60,7 +60,8 @@ export function Sidebar() {
 
       {/* 导航 */}
       <nav className="flex flex-1 flex-col gap-0.5 px-3 text-sm">
-        {navItem("/", <MessageSquareIcon className="size-4 shrink-0" />, "对话")}
+        {navItem("/", <LayoutDashboardIcon className="size-4 shrink-0" />, "仪表盘")}
+        {navItem("/chat", <MessageSquareIcon className="size-4 shrink-0" />, "对话")}
         {navItem("/agents", <SettingsIcon className="size-4 shrink-0" />, "Agent 配置")}
         {navItem("/tools", <WrenchIcon className="size-4 shrink-0" />, "工具管理")}
         {navItem("/skills", <PuzzleIcon className="size-4 shrink-0" />, "技能管理")}

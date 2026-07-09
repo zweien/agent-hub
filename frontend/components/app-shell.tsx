@@ -9,7 +9,8 @@ import { useAuth } from "@/contexts/auth-context";
 
 // 路径 → 顶栏标题
 const TITLE_MAP: Record<string, string> = {
-  "/": "对话",
+  "/": "仪表盘",
+  "/chat": "对话",
   "/agents": "Agent 配置",
   "/tools": "工具管理",
   "/skills": "技能管理",
