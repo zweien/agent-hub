@@ -384,10 +384,21 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
     connect();
   }, [connect]);
 
+  // 切换到已有会话:重置状态(消息/会话id/接管),WS 重连由 chat-view 改
+  // initialSessionRef → wsUrl 变 → 上面 mount-effect 重新 connect 触发
+  // (重连带 targetId,后端回放该会话历史)。本函数只清本地状态,不碰 WS。
+  const switchSession = useCallback((targetId: string) => {
+    setMessages([]);
+    setSessionId(targetId);
+    setSandboxUrl(null);
+    setTakeoverActive(false);
+    currentAiId.current = null;
+  }, []);
+
   useEffect(() => {
     connect();
     return () => wsRef.current?.close();
   }, [connect]);
 
-  return { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation };
+  return { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation, switchSession };
 }

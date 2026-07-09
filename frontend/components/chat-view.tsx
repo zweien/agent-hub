@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ArrowUpIcon, ExternalLinkIcon, RefreshCwIcon, SkipForwardIcon,
-  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon, PanelRightIcon,
+  XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon, PanelRightIcon, PanelLeftIcon,
   CircleIcon, CircleDotIcon, CheckCircleIcon, FileIcon, ChevronDownIcon, UsersIcon,
 } from "lucide-react";
 import { useChatSocket, type ChatMessage, type SandboxExec, type TodoItem } from "@/hooks/use-chat-socket";
@@ -38,6 +38,22 @@ function buildWsUrl(token: string, sessionId?: string | null): string {
   // 带 session_id 连接 → 后端回放历史 + 订阅实时流(会话恢复 §2.4)
   if (sessionId) url += `&session_id=${encodeURIComponent(sessionId)}`;
   return url;
+}
+
+// 相对时间(会话列表用):"3分钟前"/"2小时前"/"昨天"/"7/9"
+function fmtRelative(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!t) return "";
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min}分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}小时前`;
+  const day = Math.floor(hr / 24);
+  if (day === 1) return "昨天";
+  if (day < 7) return `${day}天前`;
+  return new Date(iso).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
 interface AgentConfigBrief { id: string; name: string; model: string; mode: string; tools: string[] }
@@ -218,7 +234,7 @@ function CompactedBar({ msg }: { msg: ChatMessage }) {
 
 export function ChatView() {
   const { user } = useAuth();
-  const { artifactsCollapsed, toggleArtifacts } = useUI();
+  const { artifactsCollapsed, toggleArtifacts, conversationsCollapsed, toggleConversations } = useUI();
   const router = useRouter();
   const searchParams = useSearchParams();
   // 会话恢复(§2.4):URL ?session=xxx 携带要恢复的会话 id。
@@ -228,7 +244,7 @@ export function ChatView() {
   // newConversation 显式重置此 ref(配合 router.replace('/chat'))。
   const initialSessionRef = useRef<string | null>(searchParams.get("session"));
   const wsUrl = user ? buildWsUrl(user.token, initialSessionRef.current) : "";
-  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation } = useChatSocket(wsUrl, initialSessionRef.current);
+  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation, switchSession } = useChatSocket(wsUrl, initialSessionRef.current);
   const [input, setInput] = useState("");
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);
@@ -272,6 +288,22 @@ export function ChatView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+  // 会话列表(对话页左面板):GET /sessions,进入 + 会话变化(sessionId/status)时拉。
+  // 不轮询;新会话/状态变化后即时反映。复用 dashboard 的 SessionBrief + STATUS_META。
+  interface SessionBrief { id: string; status: string; title: string | null; created_at: string | null }
+  const SESSION_STATUS_META: Record<string, { label: string; color: string }> = {
+    done: { label: "已完成", color: "#22c55e" }, running: { label: "运行中", color: "#3b82f6" },
+    interrupted: { label: "已中断", color: "#f59e0b" }, awaiting_user: { label: "待确认", color: "#a855f7" },
+    human_takeover: { label: "人工接管", color: "#ec4899" }, idle: { label: "空闲", color: "#94a3b8" },
+  };
+  const [conversations, setConversations] = useState<SessionBrief[]>([]);
+  useEffect(() => {
+    if (!user) return;
+    fetch(`${API_BASE}/sessions`, { headers: { Authorization: `Bearer ${user.token}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(setConversations)
+      .catch(() => {});
+  }, [user, sessionId, status]);
   // urlTransform:给 markdown 里的 /api/sessions/... 图片 URL 注入 token(<img> 不带 header)
   const urlTransform = useCallback((url: string) => {
     if (url.startsWith("/api/sessions/") && user) {
@@ -321,6 +353,60 @@ export function ChatView() {
 
   return (
     <div className="flex h-full">
+      {/* 会话列表左面板(可折叠:展开 w-64 / 折叠 w-12 rail) */}
+      <aside className={`flex shrink-0 flex-col border-r bg-muted/30 transition-[width] duration-200 ${conversationsCollapsed ? "w-12" : "w-64"}`}>
+        {/* 顶部:新建 / 展开-折叠 */}
+        <div className={`flex items-center gap-1 border-b p-2 ${conversationsCollapsed ? "flex-col" : "justify-between"}`}>
+          {conversationsCollapsed ? (
+            <>
+              <Button size="icon-sm" variant="ghost" title="新对话" onClick={() => { newConversation(); initialSessionRef.current = null; router.replace("/chat"); }}>
+                <PlusIcon className="size-4" />
+              </Button>
+              <Button size="icon-sm" variant="ghost" title="展开会话列表" onClick={toggleConversations}>
+                <PanelLeftIcon className="size-4" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="outline" className="w-full" onClick={() => { newConversation(); initialSessionRef.current = null; router.replace("/chat"); }}>
+                <PlusIcon className="size-3.5" /> 新对话
+              </Button>
+              <Button size="icon-sm" variant="ghost" title="折叠会话列表" onClick={toggleConversations}>
+                <PanelLeftIcon className="size-4" />
+              </Button>
+            </>
+          )}
+        </div>
+        {/* 列表(折叠态隐藏) */}
+        {!conversationsCollapsed && (
+          <div className="flex-1 overflow-y-auto p-1.5">
+            {conversations.length === 0 && (
+              <div className="px-2 py-4 text-center text-xs text-muted-foreground">暂无会话</div>
+            )}
+            {conversations.map(s => {
+              const meta = SESSION_STATUS_META[s.status] || { label: s.status, color: "#94a3b8" };
+              const active = s.id === sessionId;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => { initialSessionRef.current = s.id; switchSession(s.id); router.replace(`/chat?session=${s.id}`); }}
+                  className={`mb-0.5 flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors ${active ? "bg-accent" : "hover:bg-accent/50"}`}
+                >
+                  <div className="flex w-full items-center gap-1.5">
+                    <span className="size-1.5 shrink-0 rounded-full" style={{ backgroundColor: meta.color }} title={meta.label} />
+                    <span className={`flex-1 truncate text-xs ${active ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                      {s.title || "(无标题)"}
+                    </span>
+                  </div>
+                  {s.created_at && (
+                    <span className="pl-3 text-[10px] text-muted-foreground/70">{fmtRelative(s.created_at)}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </aside>
       <div className="flex flex-1 flex-col min-w-0">
       {/* 接管/工作环境入口 */}
       {sandboxUrl && takeoverActive && (
