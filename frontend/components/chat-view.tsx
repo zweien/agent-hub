@@ -292,7 +292,7 @@ export function ChatView() {
       )}
       <div className="flex items-center justify-between border-b px-4 py-2">
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={() => takeover(!takeoverActive)}>
+          <Button size="sm" variant="ghost" onClick={() => takeover(!takeoverActive)} disabled={!takeoverActive && status !== "streaming"}>
             <HandIcon className="size-3.5" /> {takeoverActive ? "交还(恢复Agent)" : "接管"}
           </Button>
           {status === "error" && (

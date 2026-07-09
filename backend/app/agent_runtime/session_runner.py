@@ -28,6 +28,15 @@ logger = logging.getLogger("session_runner")
 # 每个订阅者一个 Queue;agent 每产一个事件 → 写 DB + put 到所有订阅者
 _SUBSCRIBER_MAX_QUEUE = 500
 
+# 终态保护(§5.5):这些副作用事件不参与状态机推进。
+# 当 session 已处于 done/interrupted 等终态时,迟到的此类事件(竞态产生:
+# astream_agent 已 yield done,但 sweep 工具的 exec observer 仍在落库)
+# 不应把状态回退为 running。
+_TERMINAL_STATES_SAFE_EVENTS = frozenset({
+    "token", "sandbox_exec", "tool_start", "tool_end", "todos",
+    "reasoning", "context_compacted",
+})
+
 # 当前 session:模块级全局(LangGraph 工具执行跨 task/contextvar 边界,
 # 故用进程级变量。V1 单进程、并发低(决策#19),可接受;多会话并发留 V2)。
 # start_session._run 里 set,工具 wrapper 里 get。
@@ -113,17 +122,23 @@ class SessionRegistry:
             # 同步更新 session 状态(§2.3 状态机)
             sess = db.get(Session, session_id)
             if sess:
-                if event["type"] == "done":
+                _et = event["type"]
+                if _et == "done":
                     sess.status = "done"
-                elif event["type"] in ("error", "interrupted"):
+                elif _et in ("error", "interrupted"):
                     # 失败/中止 → interrupted(§5.5 暂停态,等用户 recover)
                     sess.status = "interrupted"
-                elif event["type"] == "action_required":
+                elif _et == "action_required":
                     # 工具前置确认(§5.4) → awaiting_user
                     sess.status = "awaiting_user"
-                elif event["type"] == "takeover_begin":
+                elif _et == "takeover_begin":
                     # 人机接管(§2.3 C1) → human_takeover
                     sess.status = "human_takeover"
+                elif _et in _TERMINAL_STATES_SAFE_EVENTS:
+                    # 终态保护(§5.5):done/interrupted 之后到达的迟到副作用事件
+                    # (sandbox_exec/token/tool_*)不回退状态。竞态场景:LangGraph
+                    # stream 已 yield done,但 sweep 工具的 exec observer 仍在落库。
+                    pass
                 else:
                     sess.status = "running"
             db.commit()
