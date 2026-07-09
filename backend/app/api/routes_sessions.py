@@ -124,6 +124,44 @@ def _get_container(session_id: str):
         raise HTTPException(404, "会话容器未运行(可能已空闲回收,发条消息重启)")
 
 
+@router.get("/{session_id}/sandbox")
+async def get_session_sandbox(session_id: str, user: dict = Depends(get_current_user)):
+    """会话级沙箱状态:容器是否活跃 + 接管 URL。
+
+    供对话页显示"沙箱活跃/已回收"徽章。判定以 docker 实际容器存在为准
+    (不依赖内存 registry,孤儿容器也算活跃——只要容器在,用户就能接管)。
+    鉴权:仅 owner 或 admin。
+    """
+    db = SessionLocal()
+    try:
+        sess = db.get(Session, session_id)
+        if not sess:
+            raise HTTPException(404, "会话不存在")
+        if sess.owner_id != user["username"] and user["role"] != "admin":
+            raise HTTPException(403, "无权查看该会话")
+    finally:
+        db.close()
+
+    from app.sandbox_mgr.manager import get_manager, CONTAINER_PREFIX
+    mgr = get_manager()
+    name = f"{CONTAINER_PREFIX}{session_id}"
+    try:
+        c = mgr._client.containers.get(name)
+        active = c.status == "running"
+        # 取宿主端口拼 URL(与 routes_sandboxes 一致)
+        url = None
+        try:
+            ports = c.ports.get("8080/tcp")
+            if ports:
+                url = f"http://localhost:{ports[0]['HostPort']}"
+        except Exception:
+            pass
+        return {"active": active, "url": url}
+    except Exception:
+        # 容器不存在(已回收或从未创建)
+        return {"active": False, "url": None}
+
+
 @router.get("/{session_id}/artifacts")
 async def list_artifacts(
     session_id: str,

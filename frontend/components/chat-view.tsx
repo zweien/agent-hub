@@ -230,6 +230,27 @@ export function ChatView() {
     }
     prevStatus.current = status;
   }, [status]);
+  // 沙箱状态徽章:轮询 GET /sessions/{id}/sandbox,显示"沙箱活跃/已回收"。
+  // 仅有 sessionId 时轮询(会话已建立);每 15s 一次,足够反映空闲回收。
+  const [sandboxActive, setSandboxActive] = useState(false);
+  const [sandboxHref, setSandboxHref] = useState<string | null>(null);
+  useEffect(() => {
+    if (!user || !sessionId) { setSandboxActive(false); setSandboxHref(null); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/sessions/${sessionId}/sandbox`, { headers: { Authorization: `Bearer ${user.token}` } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setSandboxActive(!!data.active);
+        setSandboxHref(data.url || null);
+      } catch { /* 忽略瞬时错误 */ }
+    };
+    poll(); // 立即查一次
+    const t = setInterval(poll, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [user, sessionId]);
   // urlTransform:给 markdown 里的 /api/sessions/... 图片 URL 注入 token(<img> 不带 header)
   const urlTransform = useCallback((url: string) => {
     if (url.startsWith("/api/sessions/") && user) {
@@ -300,6 +321,18 @@ export function ChatView() {
           )}
           {sessionId && (
             <span className="text-xs text-muted-foreground">{sessionId.slice(0, 12)}...</span>
+          )}
+          {sessionId && (
+            sandboxActive
+              ? <span className="flex items-center gap-1 rounded bg-green-50 px-1.5 py-0.5 text-xs text-green-600" title="会话沙箱容器运行中">
+                  <span className="size-1.5 rounded-full bg-green-500" /> 沙箱活跃
+                  {sandboxHref && (
+                    <a href={sandboxHref} target="_blank" rel="noopener noreferrer" className="ml-0.5 underline hover:text-green-700">打开</a>
+                  )}
+                </span>
+              : <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground" title="沙箱已回收或未创建,发条消息可重启">
+                  <span className="size-1.5 rounded-full bg-muted-foreground/50" /> 沙箱已回收
+                </span>
           )}
         </div>
         {/* 新对话:仅非流式且已有消息时显示 */}

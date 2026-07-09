@@ -84,7 +84,11 @@ export default function SandboxesPage() {
                       {!s.in_registry && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-600" title="后端重启后遗留的容器,内存无记录">孤儿</span>}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      会话 {s.session_id.slice(0, 20)} · {s.title || "(无标题)"} · 用户 {s.owner || "?"}
+                      会话{" "}
+                      <Link href="/sessions" className="font-mono text-primary hover:underline" title="在会话回放中查看">
+                        {s.session_id.slice(0, 20)}
+                      </Link>
+                      {" · "}{s.title || "(无标题)"} · 用户 {s.owner || "?"}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       端口 {s.port ?? "?"} · {s.idle_seconds != null ? `空闲 ${fmtDuration(s.idle_seconds)}` : "无活跃记录"} · 状态 {s.status}

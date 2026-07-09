@@ -27,6 +27,21 @@ logger = logging.getLogger("sandbox_mgr")
 CONTAINER_PREFIX = "agent-sandbox-"
 
 
+def _parse_docker_ts(s: str) -> Optional[float]:
+    """解析 docker 时间戳(如 '2026-07-09T08:23:15.250734662Z')为 epoch 秒。失败返回 None。"""
+    if not s:
+        return None
+    try:
+        # 纳秒精度,docker 用 Z 结尾;datetime.fromisoformat 不接受纳秒+Z,
+        # 截到微秒并替换 Z 为 +00:00
+        cleaned = s.rstrip("Z").split(".")[0] if "." in s else s.rstrip("Z")
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(cleaned).replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
 # 每次 exec 后被调用,供调用方写事件流(§5.1)。
 ExecObserver = Callable[["ExecResult"], None]
 
@@ -189,6 +204,47 @@ class SandboxManager:
         if ports:
             return int(ports[0]["HostPort"])
         return None
+
+    def reap_orphan_containers(self, max_age_s: int = 7200) -> int:
+        """扫 docker 实际容器,回收"孤儿"——内存 registry 里无记录的容器。
+
+        孤儿典型来源:后端重启(_sessions 是纯内存 dict,重启即清空,
+        但 Docker 容器继续跑)。reap_idle_sessions 只扫内存,扫不到孤儿,
+        故此方法补漏。判定:container 存在但 session_id 不在 self._sessions。
+        孤儿无 last_activity_at,用容器 started_at 算存活时间,超 max_age_s 回收。
+        返回回收数。
+        """
+        now = time.time()
+        reaped = 0
+        try:
+            containers = self._client.containers.list(all=False, filters={"name": CONTAINER_PREFIX})
+        except Exception as e:
+            logger.warning("扫孤儿容器失败:%s", e)
+            return 0
+        for c in containers:
+            name = c.name
+            sid = name[len(CONTAINER_PREFIX):] if name.startswith(CONTAINER_PREFIX) else name
+            if sid in self._sessions:
+                continue  # 内存有记录,非孤儿(归 reap_idle_sessions 管)
+            # 孤儿:用 started_at 算存活
+            try:
+                started = c.attrs.get("State", {}).get("StartedAt", "")
+                # docker 时间格式 "2026-07-09T08:23:15.250734662Z"
+                started_ts = _parse_docker_ts(started)
+            except Exception:
+                started_ts = None
+            if started_ts is None:
+                continue  # 解析失败不冒险删
+            age = now - started_ts
+            if age > max_age_s:
+                try:
+                    c.remove(force=True)
+                    reaped += 1
+                    logger.info("回收孤儿容器 %s(存活 %ds > %ds)", name, int(age), max_age_s)
+                except Exception as e:
+                    logger.warning("回收孤儿容器 %s 失败:%s", name, e)
+        return reaped
+
 
     # —— 执行(进事件流 §2.5)——
     def exec(self, session_id: str, command: str, workdir: str = "/workspace") -> ExecResult:

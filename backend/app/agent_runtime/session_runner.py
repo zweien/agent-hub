@@ -28,6 +28,10 @@ logger = logging.getLogger("session_runner")
 # 每个订阅者一个 Queue;agent 每产一个事件 → 写 DB + put 到所有订阅者
 _SUBSCRIBER_MAX_QUEUE = 500
 
+# 孤儿容器(后端重启后内存 registry 无记录)存活上限:超过则自动回收。
+# 用容器 started_at 算(孤儿无 last_activity_at)。给用户 2h 窗口回来继续。
+ORPHAN_MAX_AGE_S = 2 * 3600
+
 # 终态保护(§5.5):这些副作用事件不参与状态机推进。
 # 当 session 已处于 done/interrupted 等终态时,迟到的此类事件(竞态产生:
 # astream_agent 已 yield done,但 sweep 工具的 exec observer 仍在落库)
@@ -511,9 +515,16 @@ class SessionRegistry:
             state.last_activity_at = time.time()
 
     async def reap_idle_sessions(self, max_idle_s: int = 1800) -> int:
-        """扫回收空闲超时会话的容器(reaper task 调用)。返回回收数。"""
+        """扫回收空闲超时会话的容器(reaper task 调用)。返回回收数。
+
+        两路回收:
+          ① 内存 registry 里的会话:空闲超 max_idle_s 回收(有 last_activity_at)
+          ② 孤儿容器(后端重启后内存无记录):存活超 ORPHAN_MAX_AGE_S 回收
+            (用容器 started_at 算,内存失忆时唯一时间依据)
+        """
         now = time.time()
         reaped = 0
+        # ① 内存会话空闲回收
         for sid, state in list(self._sessions.items()):
             if state.task and not state.task.done():
                 continue  # 运行中不回收
@@ -522,6 +533,12 @@ class SessionRegistry:
                 state.container_name = ""
                 reaped += 1
                 logger.info("空闲回收 session=%s 容器", sid)
+        # ② 孤儿容器回收(后端重启遗留,内存 registry 无记录)
+        try:
+            from app.sandbox_mgr.manager import get_manager
+            reaped += get_manager().reap_orphan_containers(max_age_s=ORPHAN_MAX_AGE_S)
+        except Exception:
+            logger.warning("扫孤儿容器异常", exc_info=True)
         return reaped
 
     def get_history(self, session_id: str, limit: int = 100) -> list[dict]:
