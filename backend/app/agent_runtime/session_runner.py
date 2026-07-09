@@ -435,6 +435,13 @@ class SessionRegistry:
                 state.container_name = mgr.acquire(session_id, **hw_kwargs)
                 logger.info("会话 %s 容器就绪: %s (模板=%s)", session_id, state.container_name,
                             tpl.name if tpl else "默认")
+                # 确保 /workspace/skills 存在(空目录也行)。镜像默认无此路径,
+                # 不预建则 SkillsMiddleware 首轮探测 find 失败 exit 2(显示噪音),
+                # 且无 skill 同步时探测永远落空。mkdir -p 幂等。
+                try:
+                    mgr.exec(session_id, "mkdir -p /workspace/skills", workdir="/")
+                except Exception as e:
+                    logger.warning("会话 %s 建 /workspace/skills 失败(不阻断):%s", session_id, e)
                 # 按模板装额外 pip 包(镜像已预装的不重复)
                 if tpl and tpl.pip_packages:
                     pkgs = " ".join(tpl.pip_packages)
