@@ -307,14 +307,19 @@ def _convert_step_to_glb(container, step_path: str, filename: str) -> tuple[str,
     # build123d 的 export_gltf 在当前 OCP 版本导出空网格(已知 bug),
     # 故经 STL 中转 + trimesh 转出带网格的有效 GLB(model-viewer 可渲染)。
     py_code = (
-        "import os\n"
+        "import os, subprocess, sys\n"
         f"step={step_path!r}\n"
         f"glb={glb_path!r}\n"
         "if not (os.path.exists(glb) and os.path.getmtime(glb) > os.path.getmtime(step)):\n"
         "    os.makedirs(os.path.dirname(glb), exist_ok=True)\n"
+        "    try:\n"
+        "        import trimesh\n"
+        "    except ImportError:\n"
+        "        subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet', 'trimesh'], check=True)\n"
+        "        import trimesh\n"
         "    from build123d import import_step\n"
         "    from build123d.exporters3d import export_stl\n"
-        "    import trimesh, tempfile\n"
+        "    import tempfile\n"
         "    stl = tempfile.NamedTemporaryFile(suffix='.stl', delete=False).name\n"
         "    export_stl(import_step(step), stl)\n"
         "    trimesh.load(stl).export(glb)\n"
