@@ -262,16 +262,16 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
         {/* w-[95vw] 接近全屏(max-w-none 覆盖 dialog 默认 sm:max-w-lg),让 3D 模型
             在宽屏上有最大视野;h-[90vh] 留一点边距不顶满。 */}
         <DialogContent className="flex h-[90vh] w-[95vw] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
-          <DialogHeader className="flex-row items-center justify-between border-b px-4 py-3">
-            <div className="flex items-center gap-2">
+          <DialogHeader className="flex-row items-center justify-between border-b py-3 pl-4 pr-12">
+            <div className="flex min-w-0 items-center gap-2">
               <TypeIcon type={selectedArtifact?.type || ""} />
-              <DialogTitle className="font-mono text-sm">{selectedArtifact?.name}</DialogTitle>
+              <DialogTitle className="truncate font-mono text-sm">{selectedArtifact?.name}</DialogTitle>
               {selectedArtifact && (
-                <span className="text-xs text-muted-foreground/70">{formatSize(selectedArtifact.size)}</span>
+                <span className="shrink-0 text-xs text-muted-foreground/70">{formatSize(selectedArtifact.size)}</span>
               )}
             </div>
             {selectedArtifact && (
-              <a href={downloadUrl(selectedArtifact.name)} download={selectedArtifact.name}>
+              <a href={downloadUrl(selectedArtifact.name)} download={selectedArtifact.name} className="shrink-0">
                 <Button size="sm" variant="outline">
                   <DownloadIcon className="size-3.5" /> 下载
                 </Button>
