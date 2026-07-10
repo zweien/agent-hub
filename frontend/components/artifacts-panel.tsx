@@ -259,7 +259,9 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
 
       {/* 全屏 3D 查看器:点"全屏"按钮打开,接近全屏的 model-viewer + 下载 */}
       <Dialog open={fullscreen} onOpenChange={setFullscreen}>
-        <DialogContent className="flex h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+        {/* w-[95vw] 接近全屏(max-w-none 覆盖 dialog 默认 sm:max-w-lg),让 3D 模型
+            在宽屏上有最大视野;h-[90vh] 留一点边距不顶满。 */}
+        <DialogContent className="flex h-[90vh] w-[95vw] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
           <DialogHeader className="flex-row items-center justify-between border-b px-4 py-3">
             <div className="flex items-center gap-2">
               <TypeIcon type={selectedArtifact?.type || ""} />
