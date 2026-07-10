@@ -18,6 +18,9 @@ RUN $PY -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/sim
 # build123d:参数化 CAD 内核,其依赖链会自动拉入 OCP(cadquery-ocp-novtk/proxy = OpenCascade bindings)。
 RUN $PY -m pip install --no-cache-dir build123d
 
+# trimesh:STEP→GLB 转换链(前端 3D 预览)用。烤进镜像避免首次预览时 pip 下载延迟 / 内网无 PyPI 出口失败。
+RUN $PY -m pip install --no-cache-dir trimesh
+
 # playwright:cad-viewer skill 的 snapshot 渲染需要(headless 出 PNG)
 RUN $PY -m pip install --no-cache-dir playwright \
     && $PY -m playwright install chromium
