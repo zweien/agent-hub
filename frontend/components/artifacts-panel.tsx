@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { API_BASE } from "@/contexts/auth-context";
 import {
@@ -9,6 +10,13 @@ import {
 import {
   DownloadIcon, FileIcon, ImageIcon, PackageIcon, PanelRightCloseIcon, RefreshCwIcon,
 } from "lucide-react";
+
+// model-viewer 是 web component,import 即注册 <model-viewer> 自定义元素(副作用)。
+// SSR 不识别自定义元素,故动态加载(仅客户端)。返回 null——元素直接在 JSX 里用。
+const ModelViewerLoader = dynamic(
+  () => import("@google/model-viewer").then(() => () => null),
+  { ssr: false },
+);
 
 interface Artifact {
   name: string;      // 相对 /workspace 的路径,可能含子目录(如 "out/wing.step")
@@ -19,6 +27,9 @@ interface Artifact {
 
 const IMAGE_TYPES = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const CAD_TYPES = ["step", "stp", "stl", "3mf", "glb", "gltf", "obj"];
+// 需转 GLB 才能预览的类型(STEP/STP);STL/GLB/GLTF/OBJ model-viewer 可直接渲染
+const STEP_TYPES = ["step", "stp"];
+const MESH_TYPES = ["stl", "glb", "gltf", "obj"];
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -140,9 +151,15 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
 
   const downloadUrl = (name: string) =>
     `${API_BASE}/sessions/${sessionId}/artifacts/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}`;
+  // model-viewer 加载 URL:STEP/STP 走 ?convert=glb(后端容器转 GLB),其余 mesh 类型直给
+  const viewerUrl = (name: string, type: string) =>
+    STEP_TYPES.includes(type)
+      ? `${API_BASE}/sessions/${sessionId}/artifacts/${encodeURIComponent(name)}?token=${encodeURIComponent(token)}&convert=glb`
+      : downloadUrl(name);
 
   const tree = useMemo(() => buildTree(items), [items]);
   const selectedArtifact = items.find((a) => a.name === selected);
+  const is3D = selectedArtifact && (STEP_TYPES.includes(selectedArtifact.type) || MESH_TYPES.includes(selectedArtifact.type));
 
   return (
     <aside className="flex w-72 shrink-0 flex-col border-l bg-background">
@@ -187,12 +204,13 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
         )}
       </div>
 
-      {/* 选中文件的预览区(图片 inline;其余仅显示文件信息) */}
+      {/* 选中文件的预览区:图片 inline / 3D 交互(STEP 转GLB 或 mesh 直渲)/ 其余下载 */}
       {selectedArtifact && (
         <div className="border-t p-2">
           <div className="mb-1 flex items-center gap-1.5">
             <TypeIcon type={selectedArtifact.type} />
             <span className="truncate font-mono text-xs" title={selectedArtifact.name}>{selectedArtifact.name}</span>
+            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">{formatSize(selectedArtifact.size)}</span>
           </div>
           {IMAGE_TYPES.includes(selectedArtifact.type) ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -202,6 +220,24 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
               className="w-full rounded border bg-muted/30"
               loading="lazy"
             />
+          ) : is3D ? (
+            <>
+              <ModelViewerLoader />
+              {/* @ts-expect-error model-viewer 是 web component,无 TS 类型 */}
+              <model-viewer
+                src={viewerUrl(selectedArtifact.name, selectedArtifact.type)}
+                alt={selectedArtifact.name}
+                camera-controls
+                auto-rotate
+                rotation-per-second="30deg"
+                shadow-intensity="1"
+                environment-image="neutral"
+                class="h-56 w-full rounded border bg-gradient-to-b from-muted/40 to-background"
+              />
+              <div className="mt-1 text-center text-[10px] text-muted-foreground/70">
+                {STEP_TYPES.includes(selectedArtifact.type) ? "STEP→GLB 按需转换(首次稍候)" : "拖拽旋转 · 滚轮缩放"}
+              </div>
+            </>
           ) : (
             <a href={downloadUrl(selectedArtifact.name)} download={selectedArtifact.name}>
               <Button size="sm" variant="outline" className="w-full">

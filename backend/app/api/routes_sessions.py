@@ -24,8 +24,8 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 # artifacts 扫描根:整个 /workspace(agent 用 write_file 自由选路径写,
 # 不强制写 /workspace/artifacts/,故扫整个工作区,排除 skills 目录)。
 ARTIFACTS_ROOT = "/workspace"
-# 扫描时排除的子目录(skills 是能力包,非产物)
-_ARTIFACTS_EXCLUDE_DIRS = {"skills"}
+# 扫描时排除的子目录(skills 是能力包;隐藏目录 .glb-cache 是 3D 预览转换缓存)
+_ARTIFACTS_EXCLUDE_DIRS = {"skills", ".glb-cache"}
 
 # 文件扩展名 → Content-Type 映射(图片 inline 显示,3D/CAD 文件触发下载)
 _CONTENT_TYPES = {
@@ -218,6 +218,7 @@ async def get_artifact(
     session_id: str,
     filename: str,
     token: Optional[str] = Query(default=None),
+    convert: Optional[str] = Query(default=None),
     user: Optional[dict] = Depends(get_optional_user),
 ):
     """下载/预览单个 artifact。
@@ -225,6 +226,9 @@ async def get_artifact(
     鉴权双模式:Authorization header(JWT)或 ?token=(供 <img src=...> 用)。
     按 .ext 设 Content-Type:图片 inline 显示,STEP/STL 触发下载。
     filename 为相对 /workspace 的路径(如 "report.md" 或 "out/wing.step")。
+    ?convert=glb:把 STEP/STP 转成 GLB(用容器里 build123d),inline 返回
+      model/gltf-binary 供 <model-viewer> 交互 3D 预览。结果缓存到容器
+      /workspace/.glb-cache/<step名>.glb(.glb-cache 在产物扫描时排除)。
     """
     # 防路径穿越:拒绝绝对路径 / .. 段,只允许相对 /workspace 的子路径
     if not filename or filename.startswith("/") or ".." in filename.split("/"):
@@ -238,23 +242,28 @@ async def get_artifact(
         db.close()
 
     container = _get_container(session_id)
-    # base64 读出文件内容(兼容二进制,参考 docker_backend.py download_files)
-    # filename 已校验无 .. / 非绝对,拼接到 ARTIFACTS_ROOT 下
-    target = f"{ARTIFACTS_ROOT}/{filename}"
-    result = container.exec_run(
-        ["bash", "-lc", f'base64 "{target}" 2>/dev/null'],
-    )
-    b64 = (result.output.decode() if isinstance(result.output, bytes) else str(result.output))
-    b64 = b64.replace("\n", "").replace("\r", "").strip()
-    if not b64:
-        raise HTTPException(404, f"产物 {filename} 不存在(可能 agent 尚未生成)")
-    try:
-        raw = base64.b64decode(b64)
-    except Exception as e:
-        raise HTTPException(500, f"产物解码失败: {e}")
-
+    src_path = f"{ARTIFACTS_ROOT}/{filename}"
     ext = os.path.splitext(filename)[1].lower()
-    content_type, inline = _CONTENT_TYPES.get(ext, ("application/octet-stream", False))
+
+    # —— ?convert=glb:STEP/STP → GLB(交互 3D 预览用)——
+    if convert == "glb" and ext in (".step", ".stp"):
+        src_path, content_type, inline = _convert_step_to_glb(container, src_path, filename)
+        filename = os.path.splitext(filename)[0] + ".glb"
+        b64 = _read_file_b64(container, src_path)
+        if not b64:
+            raise HTTPException(500, "STEP→GLB 转换失败")
+        raw = base64.b64decode(b64)
+    else:
+        # base64 读出文件内容(兼容二进制,参考 docker_backend.py download_files)
+        b64 = _read_file_b64(container, src_path)
+        if not b64:
+            raise HTTPException(404, f"产物 {filename} 不存在(可能 agent 尚未生成)")
+        try:
+            raw = base64.b64decode(b64)
+        except Exception as e:
+            raise HTTPException(500, f"产物解码失败: {e}")
+        content_type, inline = _CONTENT_TYPES.get(ext, ("application/octet-stream", False))
+
     # Content-Disposition 文件名用 basename(避免路径斜杠),非 ASCII 用 RFC 5987
     # filename*=UTF-8 编码(latin-1 header 编不了中文,会 UnicodeEncodeError)。
     disp_name = os.path.basename(filename)
@@ -267,3 +276,60 @@ async def get_artifact(
     disposition_type = "attachment" if not inline else "inline"
     headers = {"Content-Disposition": f"{disposition_type}; {disp}"}
     return Response(content=raw, media_type=content_type, headers=headers)
+
+
+def _read_file_b64(container, path: str) -> str:
+    """base64 读容器内文件,返回去换行的 b64 串(空=文件不存在/读失败)。"""
+    result = container.exec_run(["bash", "-lc", f'base64 "{path}" 2>/dev/null'])
+    b64 = (result.output.decode() if isinstance(result.output, bytes) else str(result.output))
+    return b64.replace("\n", "").replace("\r", "").strip()
+
+
+# STEP/STP 转 GLB 的缓存目录(产物扫描 list_artifacts 的 _ARTIFACTS_EXCLUDE_DIRS 已含 .glb-cache)
+_GLB_CACHE_DIR = "/workspace/.glb-cache"
+
+
+def _convert_step_to_glb(container, step_path: str, filename: str) -> tuple[str, str, bool]:
+    """在容器里用 build123d 把 STEP 转成 GLB,缓存到 .glb-cache。返回 (glb_path, content_type, inline)。
+
+    幂等:缓存命中(且比 step 新)直接复用,否则重新转。
+    """
+    import hashlib
+    # 缓存路径:用 step 相对路径的 hash 避免同名/路径冲突
+    rel = filename.lstrip("/")
+    key = hashlib.md5(rel.encode()).hexdigest()[:12]
+    glb_path = f"{_GLB_CACHE_DIR}/{key}.glb"
+    # build123d 转换脚本(写临时文件再跑,避免 -c 的 shell 转义/缩进问题)。
+    # 探测有 build123d 的 python:CAD 镜像版本不同,build123d 可能装在
+    # python3.10 或 python3.12,逐个试。
+    script_path = f"/tmp/_step2glb_{key}.py"
+    # 转换链:STEP → STL(build123d export_stl)→ GLB(trimesh)。
+    # build123d 的 export_gltf 在当前 OCP 版本导出空网格(已知 bug),
+    # 故经 STL 中转 + trimesh 转出带网格的有效 GLB(model-viewer 可渲染)。
+    py_code = (
+        "import os\n"
+        f"step={step_path!r}\n"
+        f"glb={glb_path!r}\n"
+        "if not (os.path.exists(glb) and os.path.getmtime(glb) > os.path.getmtime(step)):\n"
+        "    os.makedirs(os.path.dirname(glb), exist_ok=True)\n"
+        "    from build123d import import_step\n"
+        "    from build123d.exporters3d import export_stl\n"
+        "    import trimesh, tempfile\n"
+        "    stl = tempfile.NamedTemporaryFile(suffix='.stl', delete=False).name\n"
+        "    export_stl(import_step(step), stl)\n"
+        "    trimesh.load(stl).export(glb)\n"
+        "    os.unlink(stl)\n"
+    )
+    # 写脚本文件 + 用第一个能 import build123d 的 python 运行
+    heredoc = (
+        f"cat > {script_path} <<'PYEOF'\n{py_code}PYEOF\n"
+        "for PY in python3.10 python3.12 python3; do"
+        "  $PY -c 'import build123d' 2>/dev/null && $PY " + script_path + " 2>&1 && exit 0;"
+        " done; echo 'no python with build123d found' >&2; exit 1"
+    )
+    result = container.exec_run(["bash", "-lc", heredoc])
+    out = (result.output.decode() if isinstance(result.output, bytes) else str(result.output))
+    if result.exit_code != 0:
+        logger.warning("STEP→GLB 转换失败(exit %d): %s", result.exit_code, out[:200])
+        raise HTTPException(500, f"STEP→GLB 转换失败: {out[:200]}")
+    return glb_path, "model/gltf-binary", True
