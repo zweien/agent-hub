@@ -3,12 +3,13 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { API_BASE } from "@/contexts/auth-context";
 import {
   FileTree, FileTreeFile, FileTreeFolder, FileTreeIcon, FileTreeName, FileTreeActions,
 } from "@/components/ai-elements/file-tree";
 import {
-  DownloadIcon, FileIcon, ImageIcon, PackageIcon, PanelRightCloseIcon, RefreshCwIcon,
+  DownloadIcon, FileIcon, ImageIcon, PackageIcon, PanelRightCloseIcon, RefreshCwIcon, MaximizeIcon,
 } from "lucide-react";
 
 // model-viewer 是 web component,import 即注册 <model-viewer> 自定义元素(副作用)。
@@ -119,6 +120,8 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
   const [error, setError] = useState<string | null>(null);
   // 选中预览(图片类 inline 预览)
   const [selected, setSelected] = useState<string | null>(null);
+  // 全屏 3D 查看器(点"全屏"按钮打开)
+  const [fullscreen, setFullscreen] = useState(false);
 
   const fetchArtifacts = useCallback(async () => {
     if (!sessionId) return;
@@ -211,6 +214,12 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
             <TypeIcon type={selectedArtifact.type} />
             <span className="truncate font-mono text-xs" title={selectedArtifact.name}>{selectedArtifact.name}</span>
             <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">{formatSize(selectedArtifact.size)}</span>
+            {/* 3D 文件:全屏查看按钮 */}
+            {is3D && (
+              <Button size="icon-sm" variant="ghost" className="size-6 shrink-0" title="全屏查看 3D" onClick={() => setFullscreen(true)}>
+                <MaximizeIcon className="size-3.5" />
+              </Button>
+            )}
           </div>
           {IMAGE_TYPES.includes(selectedArtifact.type) ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -247,6 +256,46 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
           )}
         </div>
       )}
+
+      {/* 全屏 3D 查看器:点"全屏"按钮打开,接近全屏的 model-viewer + 下载 */}
+      <Dialog open={fullscreen} onOpenChange={setFullscreen}>
+        <DialogContent className="flex h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+          <DialogHeader className="flex-row items-center justify-between border-b px-4 py-3">
+            <div className="flex items-center gap-2">
+              <TypeIcon type={selectedArtifact?.type || ""} />
+              <DialogTitle className="font-mono text-sm">{selectedArtifact?.name}</DialogTitle>
+              {selectedArtifact && (
+                <span className="text-xs text-muted-foreground/70">{formatSize(selectedArtifact.size)}</span>
+              )}
+            </div>
+            {selectedArtifact && (
+              <a href={downloadUrl(selectedArtifact.name)} download={selectedArtifact.name}>
+                <Button size="sm" variant="outline">
+                  <DownloadIcon className="size-3.5" /> 下载
+                </Button>
+              </a>
+            )}
+            <DialogDescription className="sr-only">3D 模型全屏预览</DialogDescription>
+          </DialogHeader>
+          {/* 全屏 model-viewer:撑满剩余空间,暗色背景突出模型 */}
+          {selectedArtifact && (
+            <>
+              <ModelViewerLoader />
+              {/* @ts-expect-error model-viewer 是 web component,无 TS 类型 */}
+              <model-viewer
+                src={viewerUrl(selectedArtifact.name, selectedArtifact.type)}
+                alt={selectedArtifact.name}
+                camera-controls
+                auto-rotate
+                rotation-per-second="20deg"
+                shadow-intensity="1"
+                environment-image="neutral"
+                class="h-full w-full bg-zinc-900"
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
