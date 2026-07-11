@@ -208,16 +208,22 @@ function FileSystemToolGroup({ tools }: { tools: ChatMessage["tools"] }) {
 }
 
 function SandboxExecCard({ exec }: { exec: SandboxExec }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="my-1.5 rounded-lg border bg-zinc-950 p-2 text-xs text-zinc-200">
-      <div className="mb-1 flex items-center gap-1.5 font-mono text-zinc-400">
-        <TerminalIcon className="size-3" />
-        <span className="truncate">$ {exec.command}</span>
-        <span className={`ml-auto shrink-0 rounded px-1 ${exec.exit_code === 0 ? "bg-green-900/50 text-green-300" : "bg-red-900/50 text-red-300"}`}>
+    <div className="my-1.5 rounded-lg border bg-zinc-950 text-xs text-zinc-200">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left font-mono text-zinc-400 hover:bg-zinc-900/60"
+      >
+        <TerminalIcon className="size-3 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">$ {exec.command}</span>
+        <span className={`shrink-0 rounded px-1 ${exec.exit_code === 0 ? "bg-green-900/50 text-green-300" : "bg-red-900/50 text-red-300"}`}>
           exit {exec.exit_code} · {exec.duration_s}s
         </span>
-      </div>
-      {exec.stdout && <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-zinc-300">{exec.stdout.slice(0, 1500)}</pre>}
+        <ChevronDownIcon className={`size-3 shrink-0 text-zinc-500 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && exec.stdout && <pre className="max-h-40 overflow-auto whitespace-pre-wrap border-t border-zinc-800 px-2 py-1.5 font-mono text-zinc-300">{exec.stdout.slice(0, 1500)}</pre>}
     </div>
   );
 }

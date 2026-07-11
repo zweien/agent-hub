@@ -82,6 +82,22 @@ export type ConnStatus = "connecting" | "ready" | "streaming" | "error";
 let msgIdCounter = 0;
 const nextId = () => `m${++msgIdCounter}`;
 
+// 内部命令(middleware/session_runner 自动执行,非 agent 主动跑):前端隐藏。
+// 这些是 SkillsMiddleware 探测(find/glob/base64 SKILL.md)、FilesystemMiddleware
+// 读文件(sed/grep/edit)、session_runner 初始化(mkdir skills/pip install)等,
+// 暴露给用户是噪音;只显示 agent 用 run_in_sandbox 主动执行的命令。
+const INTERNAL_CMD_PATTERNS: RegExp[] = [
+  /^mkdir -p \/workspace\/skills\b/,                          // session_runner 初始化
+  /^pip install .* \| tail -\d/,                               // session_runner 预装包
+  /^find "[^"]*" -maxdepth 1 -mindepth 1 -printf/,             // SkillsMiddleware ls
+  /^find "[^"]*" -name "[^"]*" -type f/,                       // SkillsMiddleware glob
+  /^base64 "[^"]*\/SKILL\.md"/,                                // SkillsMiddleware 读 frontmatter
+  /^sed -n "[^"]*" "[^"]*" 2>\/dev\/null/,                     // FilesystemMiddleware read
+  /^grep -rn .* \| head -\d+/,                                 // FilesystemMiddleware grep
+];
+const isInternalCmd = (cmd: string): boolean =>
+  INTERNAL_CMD_PATTERNS.some((re) => re.test(cmd));
+
 export function useChatSocket(url: string, initialSessionId?: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -186,10 +202,12 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
               }
             }
           } else if (ev.type === "sandbox_exec") {
-            if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
             const s = p as { command: string; exit_code: number; stdout: string; duration_s: number };
-            const idx = rebuilt.findIndex((m) => m.id === aiId);
-            rebuilt[idx] = { ...rebuilt[idx], sandboxExecs: [...(rebuilt[idx].sandboxExecs || []), { command: s.command, exit_code: s.exit_code, stdout: s.stdout, duration_s: s.duration_s }] };
+            if (!isInternalCmd(s.command)) {  // 隐藏内部命令
+              if (!aiId) { aiId = nextId(); rebuilt.push({ id: aiId, from: "assistant", content: "", tools: [] }); }
+              const idx = rebuilt.findIndex((m) => m.id === aiId);
+              rebuilt[idx] = { ...rebuilt[idx], sandboxExecs: [...(rebuilt[idx].sandboxExecs || []), { command: s.command, exit_code: s.exit_code, stdout: s.stdout, duration_s: s.duration_s }] };
+            }
           }
         }
         messagesRef.current = rebuilt;
@@ -233,7 +251,10 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
         break;
       }
       case "sandbox_exec": {
-        // agent 在沙箱执行命令(§5.1):追加到当前 AI 消息
+        // agent 在沙箱执行命令(§5.1):追加到当前 AI 消息。
+        // 隐藏内部命令(SkillsMiddleware/FilesystemMiddleware/session_runner 自动跑的探测/初始化),
+        // 只显示 agent 用 run_in_sandbox 主动执行的命令。
+        if (isInternalCmd(event.command)) break;
         const aiId = ensureAiMsg();
         setMsg((prev) => prev.map((m) => m.id === aiId ? {
           ...m, sandboxExecs: [...(m.sandboxExecs || []), { command: event.command, exit_code: event.exit_code, stdout: event.stdout, duration_s: event.duration_s }]
