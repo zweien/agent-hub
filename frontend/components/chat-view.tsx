@@ -528,9 +528,11 @@ export function ChatView() {
           {messages.map((msg) => (
             <Message key={msg.id} from={msg.from}>
               <MessageContent>
-                {/* ① 推理过程(可折叠;仅推理模型产生) */}
+                {/* ① 推理过程(可折叠;仅推理模型产生)。
+                    streaming 时即使无 reasoning 文本(langchain 可能丢弃 DeepSeek 的
+                    delta.reasoning 字段)也显示"思考中…"指示,避免用户长等待无反馈。 */}
                 {msg.from === "assistant" && (msg.reasoning || status === "streaming") && (
-                  <Reasoning content={msg.reasoning || ""} isStreaming={!!msg.reasoning && status === "streaming" && !msg.content} />
+                  <Reasoning content={msg.reasoning || ""} isStreaming={status === "streaming" && !msg.content} />
                 )}
                 {/* 轻量系统提示(并发拒绝等) */}
                 <NoticeBar msg={msg} />

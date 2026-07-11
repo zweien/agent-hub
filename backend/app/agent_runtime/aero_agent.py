@@ -18,6 +18,26 @@ from pathlib import Path
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from deepagents import create_deep_agent
+
+# —— monkeypatch:langchain-openai(1.x)不提取 DeepSeek/通义等非标准推理模型的
+# delta.reasoning 字段(官方注释明说 "not extracted"),导致推理过程在流式时丢失,
+# 前端"思考中…"无内容。这里给 _convert_delta_to_message_chunk 打补丁,把
+# delta.reasoning 透传到 additional_kwargs.reasoning(astream_agent 据此发 reasoning 事件)。
+import langchain_openai.chat_models.base as _lc_base
+_orig_convert_delta = _lc_base._convert_delta_to_message_chunk
+
+
+def _patched_convert_delta(_dict, default_class):
+    msg = _orig_convert_delta(_dict, default_class)
+    reasoning = _dict.get("reasoning") if isinstance(_dict, dict) else None
+    if reasoning:
+        ak = dict(getattr(msg, "additional_kwargs", {}) or {})
+        ak["reasoning"] = ak.get("reasoning", "") + reasoning
+        msg.additional_kwargs = ak
+    return msg
+
+
+_lc_base._convert_delta_to_message_chunk = _patched_convert_delta
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.config import get_settings
