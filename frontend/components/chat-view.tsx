@@ -220,6 +220,20 @@ function TypingIndicator() {
   );
 }
 
+function GeneratingStatusBar() {
+  // 整个 streaming 期间常驻输入区上方的状态条:spinner + "正在生成回答…"。
+  // 与 TypingIndicator(消息流内,仅 !content 阶段)互补:状态条覆盖全过程
+  // (reasoning + token 输出中),done 后消失,确保用户始终知道 AI 在工作。
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 pb-1">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2Icon className="size-3.5 animate-spin text-primary" />
+        <span>正在生成回答…</span>
+      </div>
+    </div>
+  );
+}
+
 function SandboxExecCard({ exec }: { exec: SandboxExec }) {
   const [open, setOpen] = useState(false);
   return (
@@ -588,6 +602,14 @@ export function ChatView() {
         const liveMsg = [...messages].reverse().find((m) => m.from === "assistant");
         const liveTodos = liveMsg?.todos;
         return liveTodos && liveTodos.length > 0 ? <StreamingTodoBar todos={liveTodos} /> : null;
+      })()}
+
+      {/* 整个 streaming 期间常驻状态条:spinner + "正在生成回答…"。
+          与上方进度条互补——进度条仅在有 todos 时显示,状态条通用(所有 streaming),
+          确保用户从头到尾都能感知 AI 在工作,不被文字输出打断。 */}
+      {status !== "ready" && status !== "error" && (() => {
+        const liveMsg = [...messages].reverse().find((m) => m.from === "assistant");
+        return liveMsg ? <GeneratingStatusBar /> : null;
       })()}
 
       {/* 输入区(ChatGPT 风格:圆角胶囊 + 工具栏)— 用原生 form 自建,绕开 PromptInput 的 InputGroup 约束 */}
