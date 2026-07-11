@@ -34,6 +34,15 @@ RUN $PY -c "import urllib.request,tarfile,io; \
     && mv /opt/text-to-cad-main /opt/text-to-cad \
     && $PY -m pip install --no-cache-dir /opt/text-to-cad/packages/cadpy
 
+# python3 默认指向系统 3.10(/usr/bin/python3),那里没装 build123d——
+# agent 写 `python3 cube.py` 会 ModuleNotFoundError → 反复 pip install / 改码,陷入死循环。
+# 把 python3/python/pip 裸名解析到 3.12(/usr/local/bin 优先于 /usr/bin),
+# 系统 3.10 与 sandbox 核心服务(python-server 用绝对路径)不受影响。
+RUN ln -sf /opt/python3.12/bin/python3.12 /usr/local/bin/python3 \
+    && ln -sf /opt/python3.12/bin/python3.12 /usr/local/bin/python \
+    && ln -sf /opt/python3.12/bin/pip3.12 /usr/local/bin/pip3 \
+    && ln -sf /opt/python3.12/bin/pip3.12 /usr/local/bin/pip
+
 # 产物目录约定:CAD agent 把 STEP/STL/PNG 等输出写到 /workspace/artifacts/
 # 后端 GET /sessions/{id}/artifacts 从此目录读取
 RUN mkdir -p /workspace/artifacts
