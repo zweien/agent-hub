@@ -26,6 +26,7 @@ import {
   ArrowUpIcon, ExternalLinkIcon, RefreshCwIcon, SkipForwardIcon,
   XIcon, HandIcon, PaperclipIcon, WrenchIcon, ShieldIcon, SquareIcon, TerminalIcon, PlusIcon, PanelRightIcon, PanelLeftIcon,
   CircleIcon, CircleDotIcon, CheckCircleIcon, FileIcon, ChevronDownIcon, UsersIcon,
+  Loader2Icon,
 } from "lucide-react";
 import { useChatSocket, type ChatMessage, type SandboxExec, type TodoItem } from "@/hooks/use-chat-socket";
 import { useAuth, API_BASE } from "@/contexts/auth-context";
@@ -98,6 +99,58 @@ function TodoPanel({ todos }: { todos: TodoItem[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function StreamingTodoBar({ todos }: { todos: TodoItem[] }) {
+  // streaming 时顶部常驻进度条:折叠一行(进度条 + 当前 in_progress 项),点击展开全部。
+  // 与消息流里的 TodoPanel 互补:streaming 时活,done 后消失(消息流保留快照)。
+  const [expanded, setExpanded] = useState(false);
+  if (!todos || todos.length === 0) return null;
+  const done = todos.filter((t) => t.status === "completed").length;
+  const total = todos.length;
+  const pct = total > 0 ? (done / total) * 100 : 0;
+  const current = todos.find((t) => t.status === "in_progress");
+  const currentText = current?.content?.trim() || "处理中…";
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 pt-1">
+      <div className="rounded-lg border bg-muted/30 text-xs">
+        {/* 折叠行:进度条 + 当前项 + 展开按钮 */}
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-muted/40"
+        >
+          <span className="shrink-0 tabular-nums text-muted-foreground">{done}/{total}</span>
+          {/* 自绘线性进度条:底 + 填充 */}
+          <span className="relative h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
+            <span className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all duration-300" style={{ width: `${pct}%` }} />
+          </span>
+          <Loader2Icon className="size-3.5 shrink-0 animate-spin text-primary" />
+          <span className="min-w-0 flex-1 truncate text-foreground">{currentText}</span>
+          <ChevronDownIcon className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </button>
+        {/* 展开态:完整 todo 列表(复用 TodoPanel 的图标/样式) */}
+        {expanded && (
+          <ul className="space-y-1 border-t px-3 py-2">
+            {todos.map((t, i) => (
+              <li key={i} className="flex items-start gap-1.5">
+                {t.status === "completed" ? (
+                  <CheckCircleIcon className="mt-0.5 size-3.5 shrink-0 text-green-600" />
+                ) : t.status === "in_progress" ? (
+                  <CircleDotIcon className="mt-0.5 size-3.5 shrink-0 animate-pulse text-blue-600" />
+                ) : (
+                  <CircleIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className={t.status === "completed" ? "text-muted-foreground line-through" : "text-foreground"}>
+                  {t.content}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -503,6 +556,14 @@ export function ChatView() {
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
+
+      {/* streaming 时顶部常驻计划进度条(取当前流式 AI 消息的 todos);
+          done 后消失,消息流里仍保留 TodoPanel 快照 */}
+      {status === "streaming" && (() => {
+        const liveMsg = [...messages].reverse().find((m) => m.from === "assistant");
+        const liveTodos = liveMsg?.todos;
+        return liveTodos && liveTodos.length > 0 ? <StreamingTodoBar todos={liveTodos} /> : null;
+      })()}
 
       {/* 输入区(ChatGPT 风格:圆角胶囊 + 工具栏)— 用原生 form 自建,绕开 PromptInput 的 InputGroup 约束 */}
       <div className="mx-auto w-full max-w-3xl px-4 pb-4">
