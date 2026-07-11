@@ -132,6 +132,9 @@ class SessionRegistry:
                 elif _et in ("error", "interrupted"):
                     # 失败/中止 → interrupted(§5.5 暂停态,等用户 recover)
                     sess.status = "interrupted"
+                elif _et == "notice":
+                    # 轻量提示(如并发拒绝):持久化+推送,但不改会话状态
+                    pass
                 elif _et == "action_required":
                     # 工具前置确认(§5.4) → awaiting_user
                     sess.status = "awaiting_user"
@@ -193,7 +196,17 @@ class SessionRegistry:
         self._ensure_container_and_skills(session_id, state)
         state.resume_event.set()
         if state.task and not state.task.done():
-            logger.warning("session %s 已有运行中的 task", session_id)
+            # 并发保护:同 session 已有运行中的 task 时,拒绝启动新 task。
+            # 两个 astream 并发写同一 checkpointer thread_id 会死锁(LangGraph
+            # checkpointer 非并发安全),且全局 _current_session_state 会被
+            # 覆盖导致工具路由错乱——表现为"发完消息无反馈"的静默卡死。
+            # 拒绝 + 提示用户等待;旧 task 继续跑完。
+            logger.warning("session %s 已有运行中的 task,拒绝并发启动(提示用户等待)", session_id)
+            self._persist_event(session_id, state,
+                                {"type": "notice",
+                                 "message": "上一条消息还在处理中,请等待完成后再发送"},
+                                actor="system")
+            return
 
         async def _run():
             # set 进程级当前 session(工具 wrapper 经 get_current_session 查)

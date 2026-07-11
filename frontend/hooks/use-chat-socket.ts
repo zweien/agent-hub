@@ -27,6 +27,7 @@ export type WsEvent =
   | { type: "takeover_end" }
   | { type: "mode_changed"; mode: string }
   | { type: "interrupted"; reason: string; action_id?: string; options?: string[] }
+  | { type: "notice"; message: string }
   | { type: "recover"; action: string }
   | { type: "sandbox_exec"; command: string; exit_code: number; stdout: string; stderr: string; duration_s: number }
   | { type: "control_ack"; ok: boolean; message: string }
@@ -72,6 +73,8 @@ export interface ChatMessage {
   compacted?: { summary: string; file_path?: string };
   pendingConfirm?: { action_id: string; tool: string; args: Record<string, unknown> };
   interrupted?: { reason: string; action_id?: string };
+  /** 轻量系统提示(如并发拒绝),不改会话状态 */
+  notice?: string;
 }
 
 export type ConnStatus = "connecting" | "ready" | "streaming" | "error";
@@ -310,6 +313,19 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
           return prev.map((m) =>
             m.id === aiId ? { ...m, interrupted: { reason: event.reason, action_id: event.action_id } } : m
           );
+        });
+        break;
+      }
+      case "notice": {
+        // 轻量提示(如并发拒绝):挂到当前 AI 消息;无 AI 消息则临时建一条
+        setMessages((prev) => {
+          const aiId = currentAiId.current;
+          if (aiId && prev.some((m) => m.id === aiId)) {
+            return prev.map((m) => (m.id === aiId ? { ...m, notice: event.message } : m));
+          }
+          const id = nextId();
+          currentAiId.current = id;
+          return [...prev, { id, from: "assistant" as const, content: "", tools: [], notice: event.message }];
         });
         break;
       }

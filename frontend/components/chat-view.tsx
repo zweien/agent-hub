@@ -203,6 +203,16 @@ function RecoveryBar({ msg, onRecover }: { msg: ChatMessage; onRecover: (a: stri
   );
 }
 
+function NoticeBar({ msg }: { msg: ChatMessage }) {
+  // 轻量系统提示(如:并发拒绝)。不改会话状态,仅提示。
+  if (!msg.notice) return null;
+  return (
+    <div className="my-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+      {msg.notice}
+    </div>
+  );
+}
+
 function CompactedBar({ msg }: { msg: ChatMessage }) {
   // deepagents SummarizationMiddleware 触发:上下文已压缩为摘要
   if (!msg.compacted) return null;
@@ -469,6 +479,8 @@ export function ChatView() {
                 {msg.from === "assistant" && (msg.reasoning || status === "streaming") && (
                   <Reasoning content={msg.reasoning || ""} isStreaming={!!msg.reasoning && status === "streaming" && !msg.content} />
                 )}
+                {/* 轻量系统提示(并发拒绝等) */}
+                <NoticeBar msg={msg} />
                 {/* 上下文压缩提示(deepagents SummarizationMiddleware 触发) */}
                 <CompactedBar msg={msg} />
                 {/* ② 计划进度(deepagents write_todos) */}
