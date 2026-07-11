@@ -335,11 +335,22 @@ function fmtTokens(n: number): string {
   return (n / 1_000_000).toFixed(1) + "M";
 }
 
+// 耗时格式化:<60s → "12.3s";<1h → "2 min 13 s";≥1h → "1 h 2 min"。
+function fmtElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const totalSec = Math.round(seconds);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return s > 0 ? `${h} h ${m} min ${s} s` : `${h} h ${m} min`;
+  return s > 0 ? `${m} min ${s} s` : `${m} min`;
+}
+
 // 本轮用量/耗时脚注(§8):AI 消息正文下方一行 muted,显示 "12.3s · 1.2k tokens"。
 // 两段各有才显示;都不存在则不渲染。
 function MessageMeta({ msg }: { msg: ChatMessage }) {
   const parts: string[] = [];
-  if (msg.elapsed_s !== undefined) parts.push(`${msg.elapsed_s}s`);
+  if (msg.elapsed_s !== undefined) parts.push(fmtElapsed(msg.elapsed_s));
   if (msg.usage) parts.push(`${fmtTokens(msg.usage.total_tokens)} tokens`);
   if (parts.length === 0) return null;
   return <p className="mt-1 text-[11px] text-muted-foreground/70">{parts.join(" · ")}</p>;
