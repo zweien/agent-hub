@@ -314,7 +314,20 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
     # 记录上次 summarization 事件,检测变化(压缩发生时通知前端)
     last_se = None
     try:
-        async for mode, payload in agent.astream(inputs, config=config, stream_mode=["messages", "updates", "values"]):
+        # 手动迭代 + per-chunk 超时:LLM gateway 流式响应偶尔挂起(收到 200 header
+        # 但 body stream 不再来数据也不报错),导致 agent.astream() 无限等。
+        # 用 wait_for 包 __anext__,90s 无新 chunk 即超时中断,避免静默卡死。
+        _STREAM_TIMEOUT_S = 90
+        aiter = agent.astream(inputs, config=config, stream_mode=["messages", "updates", "values"]).__aiter__()
+        while True:
+            try:
+                mode, payload = await asyncio.wait_for(aiter.__anext__(), timeout=_STREAM_TIMEOUT_S)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                logger.warning("astream chunk 超时 %ds(LLM 流式挂起),中断", _STREAM_TIMEOUT_S)
+                yield {"type": "error", "message": f"LLM 响应超时({_STREAM_TIMEOUT_S}s 无数据),请重试"}
+                return
             if mode == "messages":
                 chunk, _meta = payload
                 if isinstance(chunk, AIMessageChunk):

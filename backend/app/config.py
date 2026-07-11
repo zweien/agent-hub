@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     llm_base_url: str = Field(default="http://192.168.2.220:3000/v1")
     llm_api_key: str = Field(default="")
     llm_model: str = Field(default="deepseek-v4-flash")
-    llm_max_tokens: int = Field(default=4000)  # 推理模型需较大预算(§9 发现)
+    llm_max_tokens: int = Field(default=16000)  # 推理模型 reasoning 计入 max_tokens,4000 会被复杂任务的推理占满导致实际回复为空
     # 模型输入上下文窗口(deepagents SummarizationMiddleware 用):
     #   compute_summarization_defaults 检 model.profile.max_input_tokens,有则走
     #   fraction 路径(trigger=85% / keep=10%,自适应);无则 fallback 到 170k fixed(偏大)。
