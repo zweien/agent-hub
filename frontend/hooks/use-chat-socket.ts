@@ -328,12 +328,16 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
         break;
       }
       case "interrupted": {
+        // 熔断/超时/异常 → 本轮结束(等用户 recover 决策)。状态置 ready,
+        // 否则 "正在生成回答…" 状态条/顶部进度条会一直挂着(interrupted 不发 done)。
         const aiId = currentAiId.current;
         if (aiId) {
           setMsg((prev) => prev.map((m) =>
             m.id === aiId ? { ...m, interrupted: { reason: event.reason, action_id: event.action_id } } : m
           ));
         }
+        setStatus("ready");
+        currentAiId.current = null;
         break;
       }
       case "notice": {

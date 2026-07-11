@@ -112,7 +112,8 @@ function StreamingTodoBar({ todos }: { todos: TodoItem[] }) {
   const total = todos.length;
   const pct = total > 0 ? (done / total) * 100 : 0;
   const current = todos.find((t) => t.status === "in_progress");
-  const currentText = current?.content?.trim() || "处理中…";
+  const allDone = done === total && !current;
+  const currentText = current?.content?.trim() || (allDone ? "全部完成" : "处理中…");
   return (
     <div className="mx-auto w-full max-w-3xl px-4 pt-1">
       <div className="rounded-lg border bg-muted/30 text-xs">
@@ -127,8 +128,13 @@ function StreamingTodoBar({ todos }: { todos: TodoItem[] }) {
           <span className="relative h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
             <span className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all duration-300" style={{ width: `${pct}%` }} />
           </span>
-          <Loader2Icon className="size-3.5 shrink-0 animate-spin text-primary" />
-          <span className="min-w-0 flex-1 truncate text-foreground">{currentText}</span>
+          {/* 全部完成显示 ✓(不再转圈);否则 spinner */}
+          {allDone ? (
+            <CheckCircleIcon className="size-3.5 shrink-0 text-green-600" />
+          ) : (
+            <Loader2Icon className="size-3.5 shrink-0 animate-spin text-primary" />
+          )}
+          <span className={`min-w-0 flex-1 truncate ${allDone ? "text-muted-foreground" : "text-foreground"}`}>{currentText}</span>
           <ChevronDownIcon className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </button>
         {/* 展开态:完整 todo 列表(复用 TodoPanel 的图标/样式) */}
