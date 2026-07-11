@@ -37,28 +37,48 @@ CAD_SKILL_CONTENT = """\
 
 从自然语言或图片需求,用 build123d 生成参数化 CAD 模型,主输出 STEP。
 
+## ⛔ 硬约束(必须遵守,否则陷入死循环)
+
+- **只用 build123d,严禁使用 cadquery / pythonocc-core / OCP / gmsh / ezdxf**。
+  这些库未预装,`pip install` 会失败或拖垮;cadquery 装在系统 python3.10 会冲突。
+  build123d 已预装在 python3(3.12),直接 `python3 your_script.py` 即可。
+- **不要 `pip install` 任何 CAD 库**。build123d + trimesh + matplotlib 已就绪。
+- **不要 import ocp_vscode**(无此模块,是 VSCode 扩展专用)。
+- **脚本失败时最多改 2 次**;连续失败说明方向错了,停下来报告错误,
+  不要反复 pip install / 换库 / 改 API 重试。
+
+## 最小可运行模板(直接照抄改参数)
+
+```python
+# /workspace/part.py — 写好后 python3 /workspace/part.py 运行
+from build123d import Box, Cylinder, Mode
+from build123d.exporters3d import export_step
+
+# 建模(示例:带孔的盒子)
+part = Box(50, 50, 20) - Cylinder(5, 30)
+
+# 导出 STEP
+export_step(part, "/workspace/artifacts/part.step")
+
+# 自检
+assert part.volume > 0
+assert part.is_valid()
+print(f"体积 = {part.volume:.1f} mm³,STEP 已导出")
+```
+
 ## 工作流
 
 1. **理解需求**:确认零件几何、尺寸、单位(默认 mm)、约束
-2. **写 build123d Python 代码**:用 build123d 的 BP(Builder Pattern)API 构建几何
-3. **导出 STEP**:调用 `cadpy` 辅助导出到 `/workspace/artifacts/<name>.step`
-4. **自检**:验证体积为正、几何有效(`part.is_valid()`)
-5. **可选导出**:按需导出 STL/GLB 到同目录
-6. **生成预览**:参考 cad-viewer skill 生成 PNG 快照
-
-## 脚本调用
-
-text-to-cad 仓库已装在 `/opt/text-to-cad`,核心脚本可直接调用:
-```bash
-cd /opt/text-to-cad/skills/cad && python scripts/step <参数>
-```
-或自己写 build123d 代码内联执行。
+2. **写 build123d 代码**(照抄上方模板改参数,不要换库)
+3. **导出 STEP**:`export_step(part, "/workspace/artifacts/<name>.step")`
+4. **自检**:`part.volume > 0` 且 `part.is_valid()`
+5. **生成预览**:参考 cad-viewer skill(照抄其验证过的代码,不要自己发挥 API)
+6. **失败处理**:脚本报错就读 traceback 修;连续 2 次失败就停下报告
 
 ## build123d 速查
 
 ```python
 from build123d import Box, Cylinder, Mode, Axis, Plane
-from ocp_vscode import show  # 可选,交互预览
 
 # 基本体
 box = Box(100, 60, 30)        # 长宽高(mm)

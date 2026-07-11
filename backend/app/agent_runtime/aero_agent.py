@@ -379,7 +379,14 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                                        "is_subagent": name == "task",
                                        "is_filesystem": name in _FS_TOOLS}
                         elif isinstance(m, ToolMessage):  # 工具结果
-                            yield {"type": "tool_end", "name": m.name, "content": str(m.content)[:1000],
+                            # 截断保留头尾:run_in_sandbox 的 [exit N] 在末尾,
+                            # 纯 [:1000] 会把 exit code 截掉(熔断检测靠它)。
+                            raw = str(m.content)
+                            if len(raw) > 1000:
+                                content = raw[:500] + "\n...[truncated]...\n" + raw[-400:]
+                            else:
+                                content = raw
+                            yield {"type": "tool_end", "name": m.name, "content": content,
                                    "is_filesystem": m.name in _FS_TOOLS}
         yield {"type": "done"}
     except Exception as e:

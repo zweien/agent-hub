@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -213,6 +214,7 @@ class SessionRegistry:
             global _current_session_state
             _current_session_state = state
             try:
+                consecutive_fail = 0  # 连续 run_in_sandbox 失败计数(熔断用)
                 # 记录用户消息事件
                 self._persist_event(session_id, state,
                                     {"type": "message_in", "content": user_input}, actor="user")
@@ -231,7 +233,19 @@ class SessionRegistry:
                     if event.get("type") == "tool_start":
                         state.tool_call_count += 1
                         state.round_count += 1
+                    # 连续工具失败熔断:检测 agent 陷入"失败→重试→失败"循环
+                    # (如用错 CAD 库、API 幻觉)。run_in_sandbox 的 tool_end content 含
+                    # "[exit N]",N≠0 视为失败;成功则清零。连续 6 次失败即熔断。
+                    if event.get("type") == "tool_end" and event.get("name") == "run_in_sandbox":
+                        content = str(event.get("content", ""))
+                        m = re.search(r"\[exit (\d+)\]", content)
+                        if m and m.group(1) != "0":
+                            consecutive_fail += 1
+                        elif m:
+                            consecutive_fail = 0
                     reason = self._check_limits(state)
+                    if not reason and consecutive_fail >= 6:
+                        reason = f"工具连续失败 {consecutive_fail} 次(疑似用错库或 API),已停止避免死循环"
                     if reason:
                         self._persist_event(session_id, state,
                                             {"type": "interrupted", "reason": reason}, actor="system")
