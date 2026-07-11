@@ -62,7 +62,7 @@ export_step(part, "/workspace/artifacts/part.step")
 
 # 自检
 assert part.volume > 0
-assert part.is_valid()
+assert part.is_valid  # is_valid 是 bool 属性,不是方法
 print(f"体积 = {part.volume:.1f} mm³,STEP 已导出")
 ```
 
@@ -71,7 +71,7 @@ print(f"体积 = {part.volume:.1f} mm³,STEP 已导出")
 1. **理解需求**:确认零件几何、尺寸、单位(默认 mm)、约束
 2. **写 build123d 代码**(照抄上方模板改参数,不要换库)
 3. **导出 STEP**:`export_step(part, "/workspace/artifacts/<name>.step")`
-4. **自检**:`part.volume > 0` 且 `part.is_valid()`
+4. **自检**:`part.volume > 0` 且 `part.is_valid`(bool 属性)
 5. **生成预览**:参考 cad-viewer skill(照抄其验证过的代码,不要自己发挥 API)
 6. **失败处理**:脚本报错就读 traceback 修;连续 2 次失败就停下报告
 
@@ -93,7 +93,7 @@ export_step(part, "/workspace/artifacts/part.step")
 # 自检
 print(f"体积 = {part.volume:.1f} mm³")
 assert part.volume > 0
-assert part.is_valid()
+assert part.is_valid  # bool 属性,不是方法
 ```
 
 ## 单位与坐标约定
@@ -195,7 +195,7 @@ CAD_AGENT_PROMPT = """\
 - 在回复里用 markdown 引用预览图(路径固定写法,{SESSION_ID} 占位符由系统自动替换为当前会话 ID):
   ![预览](/api/sessions/{SESSION_ID}/artifacts/artifacts/preview.png)
   (文件在 /workspace/artifacts/preview.png,API 路径含两层 artifacts)
-- 自检:验证体积为正(`part.volume > 0`)、几何有效(`part.is_valid()`),不过关就修
+- 自检:验证体积为正(`part.volume > 0`)、几何有效(`part.is_valid`,bool 属性),不过关就修
 
 ## 工作流
 
