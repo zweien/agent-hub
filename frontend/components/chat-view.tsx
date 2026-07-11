@@ -557,9 +557,10 @@ export function ChatView() {
         <ConversationScrollButton />
       </Conversation>
 
-      {/* streaming 时顶部常驻计划进度条(取当前流式 AI 消息的 todos);
-          done 后消失,消息流里仍保留 TodoPanel 快照 */}
-      {status === "streaming" && (() => {
+      {/* 常驻计划进度条:取最后一条 AI 消息的 todos。streaming/connecting(WS 断连重连)
+          时显示,ready/error(完成/出错)时消失;消息流里仍保留 TodoPanel 快照。
+          看消息不看连接态,避免 WS 重连瞬间进度条闪烁消失。 */}
+      {status !== "ready" && status !== "error" && (() => {
         const liveMsg = [...messages].reverse().find((m) => m.from === "assistant");
         const liveTodos = liveMsg?.todos;
         return liveTodos && liveTodos.length > 0 ? <StreamingTodoBar todos={liveTodos} /> : null;
