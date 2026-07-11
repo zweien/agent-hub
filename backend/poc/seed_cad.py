@@ -101,44 +101,62 @@ CAD_VIEWER_SKILL_CONTENT = """\
 2. 用 playwright headless 渲染几何为 PNG
 3. 输出到 `/workspace/artifacts/preview.png`
 
-## 渲染方式
-
-### 方式 A:matplotlib 投影(最简,无需 CAD viewer 仓库)
+## 渲染方式(唯一推荐:STEP→STL→matplotlib,已验证可运行)
 
 ```python
-# 把 STEP 加载进 build123d,投影到 2D,matplotlib 存 PNG
-from build123d import import_step
-from build123d.exporters2d import matplotlib_svg
+# 完整可运行脚本:直接照抄,把 STEP 路径改成你的产物文件名即可。
+# 转换链 STEP→STL(build123d export_stl)→ trimesh 加载网格 → matplotlib 出 PNG。
+# 纯 headless(不依赖 pyglet/X server/OpenGL),CAD 镜像已预装 build123d+trimesh+matplotlib。
 import matplotlib
-matplotlib.use("Agg")  # headless
+matplotlib.use("Agg")  # 必须在最前,headless
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from build123d import import_step
+from build123d.exporters3d import export_stl
+import trimesh, tempfile, os
 
-part = import_step("/workspace/artifacts/part.step")
-# 投影到 XY
-svg = matplotlib_svg(part.faces_grouped(-part.location), "")
-with open("/workspace/artifacts/preview.svg", "w") as f:
-    f.write(svg)
-# 或直接多视角 PNG
+STEP = "/workspace/artifacts/part.step"      # ← 改成你的 STEP 路径
+OUT = "/workspace/artifacts/preview.png"
+
+# STEP → STL → 网格
+part = import_step(STEP)
+stl = tempfile.NamedTemporaryFile(suffix=".stl", delete=False).name
+export_stl(part, stl)
+mesh = trimesh.load(stl)
+os.unlink(stl)
+
+# matplotlib 3D 渲染网格面
+v, f = mesh.vertices, mesh.faces
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection="3d")
+ax.add_collection3d(Poly3DCollection(v[f], alpha=0.85,
+    facecolor="#9ecae1", edgecolor="#3182bd", linewidth=0.3))
+ax.set_xlim(v[:, 0].min(), v[:, 0].max())
+ax.set_ylim(v[:, 1].min(), v[:, 1].max())
+ax.set_zlim(v[:, 2].min(), v[:, 2].max())
+ax.set_box_aspect([1, 1, 1])
+ax.view_init(elev=25, azim=-50)
+ax.set_xlabel("X (mm)"); ax.set_ylabel("Y (mm)"); ax.set_zlabel("Z (mm)")
+plt.tight_layout()
+plt.savefig(OUT, dpi=100)
+print(f"预览图已生成: {OUT} ({os.path.getsize(OUT)} bytes)")
 ```
 
-### 方式 B:cad-viewer snapshot(需要 /opt/text-to-cad)
-
-```bash
-cd /opt/text-to-cad/skills/cad-viewer && python scripts/snapshot \
-    --input /workspace/artifacts/part.step \
-    --output /workspace/artifacts/preview.png
-```
+> ⚠️ 不要用以下过时/不可用的 API(会导致反复失败):
+> - `build123d.exporters2d.matplotlib_svg`(0.11+ 已移除)
+> - `face.triangulate()`(Face 对象无此方法)
+> - `/opt/text-to-cad/skills/cad-viewer/scripts/snapshot`(是目录非可执行文件,跑不通)
+> - `trimesh.Scene.save_image`(需 pyglet,headless 无)
 
 ## 输出约定
 
 - 文件名固定为 `preview.png`(后端 artifacts 路由按名预览)
-- 尺寸 800×600 或更大,白底
-- 复杂零件可生成多视角
+- 尺寸 800×600,白底
 
 ## 注意
 
-- headless 渲染用 `matplotlib.use("Agg")`,不要用 TkAgg(会找 X server)
-- STEP 文件大时渲染慢,适当降采样
+- `matplotlib.use("Agg")` 必须在 import pyplot 之前,否则找 X server 报错
+- 把脚本写到 `/workspace/preview.py` 后 `python3 /workspace/preview.py` 运行
 """
 
 
