@@ -31,7 +31,7 @@ export type WsEvent =
   | { type: "recover"; action: string }
   | { type: "sandbox_exec"; command: string; exit_code: number; stdout: string; stderr: string; duration_s: number }
   | { type: "control_ack"; ok: boolean; message: string }
-  | { type: "done" }
+  | { type: "done"; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; elapsed_s?: number }
   | { type: "error"; message: string };
 
 // ===== 消息状态(渲染用) =====
@@ -75,6 +75,10 @@ export interface ChatMessage {
   interrupted?: { reason: string; action_id?: string };
   /** 轻量系统提示(如并发拒绝),不改会话状态 */
   notice?: string;
+  /** 本轮用量统计(done 载荷,每轮总量) */
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+  /** 本轮耗时秒(done 载荷) */
+  elapsed_s?: number;
 }
 
 export type ConnStatus = "connecting" | "ready" | "streaming" | "error";
@@ -208,6 +212,15 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
               const idx = rebuilt.findIndex((m) => m.id === aiId);
               rebuilt[idx] = { ...rebuilt[idx], sandboxExecs: [...(rebuilt[idx].sandboxExecs || []), { command: s.command, exit_code: s.exit_code, stdout: s.stdout, duration_s: s.duration_s }] };
             }
+          } else if (ev.type === "done") {
+            // 本轮用量/耗时(§8):贴到当前 AI 消息
+            const d = p as { usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; elapsed_s?: number };
+            if (aiId) {
+              const idx = rebuilt.findIndex((m) => m.id === aiId);
+              if (idx >= 0) {
+                rebuilt[idx] = { ...rebuilt[idx], usage: d.usage, elapsed_s: d.elapsed_s };
+              }
+            }
           }
         }
         messagesRef.current = rebuilt;
@@ -336,6 +349,15 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
         break;
       }
       case "done": {
+        // 把本轮用量/耗时贴到当前 AI 消息(§8 用量统计/耗时)。
+        // event.usage 来自 astream_agent 累加;event.elapsed_s 来自 session_runner 注入。
+        const aiId = currentAiId.current;
+        const hasMeta = event.usage || event.elapsed_s !== undefined;
+        if (aiId && hasMeta) {
+          setMsg((prev) => prev.map((m) =>
+            m.id === aiId ? { ...m, usage: event.usage, elapsed_s: event.elapsed_s } : m
+          ));
+        }
         setStatus("ready");
         currentAiId.current = null;
         break;

@@ -35,6 +35,7 @@ export default function AgentsPage() {
   const [skills, setSkills] = useState<SkillBrief[]>([]);
   const [availTools, setAvailTools] = useState<ToolBrief[]>([]);
   const [sbTemplates, setSbTemplates] = useState<SandboxTemplateBrief[]>([]);
+  const [models, setModels] = useState<{ id: string; label: string }[]>([]);
   // 搜索 + tab(纯前端过滤)
   const [query, setQuery] = useState("");
   const [tab, setTab] = useState<TabKey>("all");
@@ -69,8 +70,13 @@ export default function AgentsPage() {
     const res = await fetch(`${API_BASE}/sandbox-templates`, { headers: { Authorization: `Bearer ${user.token}` } });
     if (res.ok) setSbTemplates(await res.json());
   };
+  const fetchModels = async () => {
+    if (!user) return;
+    const res = await fetch(`${API_BASE}/models`, { headers: { Authorization: `Bearer ${user.token}` } });
+    if (res.ok) setModels(await res.json());
+  };
 
-  useEffect(() => { fetchConfigs(); fetchSkills(); fetchTools(); fetchSbTemplates(); }, [user]);
+  useEffect(() => { fetchConfigs(); fetchSkills(); fetchTools(); fetchSbTemplates(); fetchModels(); }, [user]);
 
   // 前端过滤:搜索(名称)+ tab(须在 early-return 之前,守 rules-of-hooks)
   const filtered = useMemo(() => {
@@ -195,6 +201,7 @@ export default function AgentsPage() {
                 skills={skills}
                 availTools={availTools}
                 sbTemplates={sbTemplates}
+                models={models}
                 onStartEdit={() => setEditing(true)}
                 onCancelEdit={() => { setEditing(false); if (!selected) setSheetOpen(false); }}
                 onSaved={onSaved}
@@ -209,7 +216,7 @@ export default function AgentsPage() {
 
 // ===== Sheet 内的配置详情/编辑(查看+编辑合一) =====
 function ConfigDetail({
-  config, isBuilder, isAdmin, currentUsername, editing, token, skills, availTools, sbTemplates,
+  config, isBuilder, isAdmin, currentUsername, editing, token, skills, availTools, sbTemplates, models,
   onStartEdit, onCancelEdit, onSaved,
 }: {
   config: AgentConfig | null;
@@ -221,6 +228,7 @@ function ConfigDetail({
   skills: SkillBrief[];
   availTools: ToolBrief[];
   sbTemplates: SandboxTemplateBrief[];
+  models: { id: string; label: string }[];
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaved: () => void;
@@ -319,8 +327,9 @@ function ConfigDetail({
             <label className="mb-1 block text-sm font-medium">模型</label>
             {editing ? (
               <select className="w-full rounded-md border px-3 py-2 text-sm" value={model} onChange={e => setModel(e.target.value)} disabled={!canEdit}>
-                <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-                <option value="MiniMax-M-2.7">MiniMax M 2.7</option>
+                {(models.length ? models : [{ id: model, label: model }]).map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
               </select>
             ) : (
               <p className="text-sm">{config?.model}</p>

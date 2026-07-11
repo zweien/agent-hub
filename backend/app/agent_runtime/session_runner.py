@@ -251,6 +251,11 @@ class SessionRegistry:
                                             {"type": "interrupted", "reason": reason}, actor="system")
                         logger.warning("熔断 session=%s reason=%s", session_id, reason)
                         return
+                    # 每轮耗时(§8):done 时算 elapsed_s 注入载荷(state.started_at 是
+                    # turn 开始锚点,start_session 每轮重置)。用量由 astream_agent 在
+                    # done 载荷里带,两者最终都进同一 JSONB,零迁移。
+                    if event.get("type") == "done":
+                        event["elapsed_s"] = round(time.time() - state.started_at, 1)
                     self._persist_event(session_id, state, event, actor="agent")
             except Exception as e:
                 # §5.5 失败暂停态:不写 error(结束),改写 interrupted(等用户决策)

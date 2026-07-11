@@ -21,6 +21,7 @@ from app.api.routes_tools import router as tools_router
 from app.api.routes_sandboxes import router as sandboxes_router
 from app.api.routes_sandbox_templates import router as sandbox_templates_router
 from app.api.routes_sessions import router as sessions_router
+from app.api.routes_models import router as models_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +47,7 @@ app.include_router(tools_router)
 app.include_router(sandboxes_router)
 app.include_router(sandbox_templates_router)
 app.include_router(sessions_router)
+app.include_router(models_router)
 app.include_router(chat_router)
 app.include_router(ws_router)
 

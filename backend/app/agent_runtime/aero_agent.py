@@ -40,7 +40,7 @@ def _patched_convert_delta(_dict, default_class):
 _lc_base._convert_delta_to_message_chunk = _patched_convert_delta
 from langgraph.checkpoint.memory import MemorySaver
 
-from app.config import get_settings
+from app.config import get_settings, resolve_model
 from app.tools.aero import run_aero
 from app.sandbox_mgr.manager import get_manager
 
@@ -114,13 +114,16 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
     if not s.llm_api_key:
         raise ValueError("LLM_API_KEY 未设置(配 .env)")
     use_model = model or s.llm_model
+    # 模型目录解析:max_tokens/context_window 目录优先,未命中回落全局(§8 模型选择)。
+    mi = resolve_model(use_model)
     llm = ChatOpenAI(
         base_url=s.llm_base_url, api_key=s.llm_api_key, model=use_model,
-        max_tokens=s.llm_max_tokens, temperature=0.3,
+        max_tokens=mi["max_tokens"], temperature=0.3,
         streaming=True,  # token 级流式更稳(§2.3)
+        stream_usage=True,  # 让网关在流末发 usage → 末块带 usage_metadata(§8 用量统计)
         # 暴露上下文窗口给 SummarizationMiddleware(create_deep_agent 默认挂):
         # 有 max_input_tokens 时走 fraction(trigger=85%/keep=10%);无则 170k fixed。
-        profile={"max_input_tokens": s.llm_context_window},
+        profile={"max_input_tokens": mi["context_window"]},
     )
     # 注册内置工具(供工厂识别)
     from app.agent_runtime.tool_factory import register_builtin, load_tools
@@ -339,6 +342,9 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
         # 用 wait_for 包 __anext__,90s 无新 chunk 即超时中断,避免静默卡死。
         _STREAM_TIMEOUT_S = 90
         aiter = agent.astream(inputs, config=config, stream_mode=["messages", "updates", "values"]).__aiter__()
+        # 用量累加器(§8 用量统计):一个 turn 内可能多次 LLM call(reasoning→工具→回答),
+        # 每次 call 的末块带各自 usage_metadata,累加成本轮总量,done 时一并发出。
+        usage_acc = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         while True:
             try:
                 mode, payload = await asyncio.wait_for(aiter.__anext__(), timeout=_STREAM_TIMEOUT_S)
@@ -357,6 +363,13 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                     rc = ak.get("reasoning_content") or ak.get("reasoning")
                     if rc:
                         yield {"type": "reasoning", "content": str(rc)}
+                    # 用量统计(stream_usage=True 时,每次 LLM call 的末块带 usage_metadata)。
+                    # 累加进 usage_acc,done 时发出本轮总量。
+                    um = getattr(chunk, "usage_metadata", None)
+                    if um:
+                        usage_acc["input_tokens"] += int(um.get("input_tokens", 0) or 0)
+                        usage_acc["output_tokens"] += int(um.get("output_tokens", 0) or 0)
+                        usage_acc["total_tokens"] += int(um.get("total_tokens", 0) or 0)
                     # 区分 content block 类型:推理模型的 content 是 list(含 reasoning/text block)
                     if isinstance(chunk.content, list):
                         for block in chunk.content:
@@ -421,7 +434,7 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                                 content = raw
                             yield {"type": "tool_end", "name": m.name, "content": content,
                                    "is_filesystem": m.name in _FS_TOOLS}
-        yield {"type": "done"}
+        yield {"type": "done", "usage": usage_acc}
     except Exception as e:
         logger.exception("astream_agent 失败")
         yield {"type": "error", "message": str(e)}

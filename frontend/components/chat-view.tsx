@@ -328,6 +328,23 @@ function CompactedBar({ msg }: { msg: ChatMessage }) {
   );
 }
 
+// token 数简写:1.2k / 12k / 1.2M
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return (n / 1000).toFixed(n < 10000 ? 1 : 0) + "k";
+  return (n / 1_000_000).toFixed(1) + "M";
+}
+
+// 本轮用量/耗时脚注(§8):AI 消息正文下方一行 muted,显示 "12.3s · 1.2k tokens"。
+// 两段各有才显示;都不存在则不渲染。
+function MessageMeta({ msg }: { msg: ChatMessage }) {
+  const parts: string[] = [];
+  if (msg.elapsed_s !== undefined) parts.push(`${msg.elapsed_s}s`);
+  if (msg.usage) parts.push(`${fmtTokens(msg.usage.total_tokens)} tokens`);
+  if (parts.length === 0) return null;
+  return <p className="mt-1 text-[11px] text-muted-foreground/70">{parts.join(" · ")}</p>;
+}
+
 export function ChatView() {
   const { user } = useAuth();
   const { artifactsCollapsed, toggleArtifacts, conversationsCollapsed, toggleConversations } = useUI();
@@ -416,8 +433,10 @@ export function ChatView() {
   const [agentConfigId, setAgentConfigId] = useState<string>("");
   // 可用工具列表(动态拉取,替代硬编码)
   const [availTools, setAvailTools] = useState<ToolBrief[]>([]);
+  // 可用模型列表(动态拉取 GET /models,替代硬编码)
+  const [models, setModels] = useState<{ id: string; label: string }[]>([]);
 
-  // 拉取已发布 agent 配置 + 工具列表
+  // 拉取已发布 agent 配置 + 工具列表 + 模型目录
   useEffect(() => {
     if (!user) return;
     fetch(`${API_BASE}/agents`, { headers: { Authorization: `Bearer ${user.token}` } })
@@ -428,6 +447,10 @@ export function ChatView() {
       .then((r) => (r.ok ? r.json() : []))
       .then((list: ToolBrief[]) => setAvailTools(list))
       .catch(() => setAvailTools([]));
+    fetch(`${API_BASE}/models`, { headers: { Authorization: `Bearer ${user.token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: { id: string; label: string }[]) => setModels(list))
+      .catch(() => setModels([]));
   }, [user]);
 
   // 选了配置后,把它声明的 model/tools/mode 同步到会话(给 agent 用统一基线)
@@ -588,6 +611,8 @@ export function ChatView() {
                 <RecoveryBar msg={msg} onRecover={recover} />
                 {/* ⑦ 最终文本回复 */}
                 {msg.content && <MessageResponse className="prose-chat" urlTransform={urlTransform}>{msg.content}</MessageResponse>}
+                {/* ⑧ 本轮用量/耗时脚注(done 载荷) */}
+                {msg.from === "assistant" && <MessageMeta msg={msg} />}
               </MessageContent>
             </Message>
           ))}
@@ -651,8 +676,9 @@ export function ChatView() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="deepseek-v4-flash">DeepSeek V4 Flash</SelectItem>
-                  <SelectItem value="MiniMax-M-2.7">MiniMax M 2.7</SelectItem>
+                  {models.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               {/* 工具选择 */}
