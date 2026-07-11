@@ -225,7 +225,11 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
         break;
       }
       case "reasoning": {
-        // 推理过程累积(仅推理模型产生;与 token 同样追加到当前 AI 消息)
+        // 推理过程累积(仅推理模型产生;与 token 同样追加到当前 AI 消息)。
+        // reasoning 是 DeepSeek 等推理模型最先到达的事件(token 之前),必须在此
+        // 设 streaming,否则 reasoning 阶段 status 仍为 ready,typing 指示器/
+        // 顶部进度条等依赖 status==='streaming' 的反馈都不显示。
+        setStatus("streaming");
         const aiId = ensureAiMsg();
         setMsg((prev) =>
           prev.map((m) =>
@@ -265,6 +269,7 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
         // §2: 控制消息回执(无 session 时 ok:false)。仅记录,不阻塞。
         break;
       case "tool_start": {
+        setStatus("streaming");  // agent 在工作(非推理模型可能 tool_start 先于 token)
         const tid = nextId();
         const aiId = ensureAiMsg();
         setMsg((prev) =>
