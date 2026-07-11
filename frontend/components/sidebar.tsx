@@ -73,6 +73,7 @@ export function Sidebar() {
         {navItem("/chat", <MessageSquareIcon className="size-4 shrink-0" />, "对话")}
         {navItem("/agents", <SettingsIcon className="size-4 shrink-0" />, "Agent 配置")}
         {navItem("/tools", <WrenchIcon className="size-4 shrink-0" />, "工具管理")}
+        {navItem("/models", <BoxesIcon className="size-4 shrink-0" />, "模型管理")}
         {navItem("/skills", <PuzzleIcon className="size-4 shrink-0" />, "技能管理")}
         {navItem("/sandbox-templates", <BoxesIcon className="size-4 shrink-0" />, "沙箱模板")}
         {navItem("/sessions", <HistoryIcon className="size-4 shrink-0" />, "会话回放")}

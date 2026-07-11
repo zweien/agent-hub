@@ -49,7 +49,7 @@ def init_db():
     create_all 不改已有表结构,故对新增列做幂等 ALTER(开发期迁移)。
     """
     # 确保所有 model 被导入,Base.metadata 才知道它们
-    from app.models import event, session, user, agent_config, skill, tool, sandbox_template  # noqa: F401
+    from app.models import event, session, user, agent_config, skill, tool, sandbox_template, model  # noqa: F401
     Base.metadata.create_all(bind=engine)
     # 幂等迁移:agent_configs 加 skill_ids / sandbox_template_id(已有表,create_all 不会加列)
     _ensure_column("agent_configs", "skill_ids", "JSONB NOT NULL DEFAULT '[]'::jsonb")
@@ -130,6 +130,17 @@ def init_db():
                 gpu_count=0,  # 无 GPU 限制
                 owner_id="admin", is_published=True,
             ))
+            db.commit()
+
+        # 插默认模型目录(若表空)——从原 config.py MODELS 字典搬迁(DB 唯一源)
+        from app.models.model import Model
+        if db.query(Model).count() == 0:
+            for m in [
+                {"model_id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "max_tokens": 16000, "context_window": 65536, "supports_reasoning": True},
+                {"model_id": "MiniMax-M2.7", "label": "MiniMax M2.7", "max_tokens": 8000, "context_window": 65536, "supports_reasoning": False},
+                {"model_id": "MiniMax-M2.5", "label": "MiniMax M2.5", "max_tokens": 8000, "context_window": 65536, "supports_reasoning": False},
+            ]:
+                db.add(Model(owner_id="admin", is_published=True, **m))
             db.commit()
 
         # Seed text-to-CAD agent(按 name 幂等 upsert:2 skill + 1 template + 1 agent)。

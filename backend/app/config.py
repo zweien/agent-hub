@@ -87,47 +87,33 @@ def get_settings() -> Settings:
 
 
 # —— 模型目录(§8 模型选择)——
-# 本地覆盖层:键 = 模型 id(与网关 /v1/models 返回的 id 对齐),值 = 元数据。
-# GET /models 会拉网关拿 id 列表,再 merge 这里;网关有但这里没有的用全局兜底。
-# 加新模型(已在网关注册):在此加一项即可,无需改代码逻辑。
-# 加新模型(网关也未有):先在网关注册,再在此加覆盖(否则只有兜底值)。
-MODELS: dict[str, dict] = {
-    "deepseek-v4-flash": {
-        "label": "DeepSeek V4 Flash",
-        "max_tokens": 16000,  # reasoning 计入 max_tokens,留足空间
-        "context_window": 65536,
-        "supports_reasoning": True,
-    },
-    "MiniMax-M2.7": {
-        "label": "MiniMax M2.7",
-        "max_tokens": 8000,
-        "context_window": 65536,
-        "supports_reasoning": False,
-    },
-    "MiniMax-M2.5": {
-        "label": "MiniMax M2.5",
-        "max_tokens": 8000,
-        "context_window": 65536,
-        "supports_reasoning": False,
-    },
-}
+# 模型元数据已迁 DB(models 表,DB 唯一源);GET /models 只读 DB,不再拉网关。
+# 加新模型:在「模型管理」页面新增。resolve_model 读 DB,未命中回落全局默认。
+# 默认模型由 db.py init_db 的 seed 块插入(deepseek-v4-flash / MiniMax-M2.7 / M2.5)。
 
 
 def resolve_model(model_id: str) -> dict:
     """按模型 id 解析元数据(max_tokens/context_window/label/supports_reasoning)。
 
-    目录优先(MODELS 覆盖层),未命中回落到全局 LLM_MAX_TOKENS/LLM_CONTEXT_WINDOW。
+    读 DB models 表;命中用其值,未命中回落全局 LLM_MAX_TOKENS/LLM_CONTEXT_WINDOW。
     build_agent 构造 ChatOpenAI 时调此函数,不再直接读全局字段。
+    DB 查询 + SessionLocal 延迟导入(避免 config ↔ db 循环 import)。
     """
+    from app.db import SessionLocal  # 延迟导入:config 被 db 导入,顶层 import 会循环
+    from app.models.model import Model
     s = get_settings()
-    entry = MODELS.get(model_id)
-    if entry:
+    db = SessionLocal()
+    try:
+        row = db.query(Model).filter(Model.model_id == model_id).first()
+    finally:
+        db.close()
+    if row:
         return {
-            "id": model_id,
-            "label": entry["label"],
-            "max_tokens": entry["max_tokens"],
-            "context_window": entry["context_window"],
-            "supports_reasoning": entry["supports_reasoning"],
+            "id": row.model_id,
+            "label": row.label,
+            "max_tokens": row.max_tokens,
+            "context_window": row.context_window,
+            "supports_reasoning": row.supports_reasoning,
         }
     # 兜底:未知模型用全局默认,label 用原 id
     return {

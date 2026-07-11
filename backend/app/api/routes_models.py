@@ -1,59 +1,114 @@
-"""模型目录路由(§8 模型选择)。
+"""模型目录路由(§8 模型选择)—— DB 唯一源的全 CRUD。
 
-GET /models:从网关 /v1/models 拉 id 列表,merge 本地 MODELS 覆盖层(标签/上下文窗口/
-supports_reasoning),返回给前端填充下拉框。网关不可达时降级为纯本地列表。
+镜像 routes_tools.py 的 CRUD + 角色/owner 控制。
+GET /models 只读本表(不再拉网关 /v1/models);user 角色只见 is_published。
 """
 from __future__ import annotations
 
-import logging
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
-import httpx
-from fastapi import APIRouter, Depends
+from app.auth import get_current_user, require_role
+from app.db import SessionLocal
+from app.models.model import Model
 
-from app.auth import get_current_user
-from app.config import MODELS, resolve_model, get_settings
-
-logger = logging.getLogger("routes_models")
 router = APIRouter(prefix="/models", tags=["models"])
+
+
+class ModelRequest(BaseModel):
+    model_id: str            # 真实模型 id(deepseek-v4-flash)
+    label: str               # 下拉框显示名
+    max_tokens: int = 16000
+    context_window: int = 65536
+    supports_reasoning: bool = False
+    is_published: bool = True
 
 
 @router.get("")
 async def list_models(user: dict = Depends(get_current_user)):
-    """返回可用模型列表(id/label/context_window/supports_reasoning)。
-
-    id 列表来源:网关 /v1/models(优先,实时反映网关注册的模型)→ merge 本地覆盖层。
-    网关不可达时降级为纯本地 MODELS(保证前端不空白)。
-    不返回 max_tokens(那是 build_agent 构造 ChatOpenAI 时用的,前端不需要)。
-    """
-    s = get_settings()
-    gw_ids: list[str] = []
+    """列表:user 看已发布;builder/admin 看全部。DB 唯一源(不拉网关)。"""
+    db = SessionLocal()
     try:
-        # 网关 /v1/models(base_url 已含 /v1,直接拼 /models)
-        url = s.llm_base_url.rstrip("/") + "/models"
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(url, headers={"Authorization": f"Bearer {s.llm_api_key}"})
-        resp.raise_for_status()
-        data = resp.json()
-        for m in data.get("data", []):
-            mid = m.get("id")
-            if mid:
-                gw_ids.append(mid)
-    except Exception as e:
-        # 降级:网关不可达/超时/格式异常 → 用纯本地列表
-        logger.warning("拉取网关 /v1/models 失败,降级为本地 MODELS 列表: %s", e)
+        q = db.query(Model)
+        if user["role"] == "user":
+            q = q.filter(Model.is_published == True)
+        rows = q.order_by(Model.created_at.desc()).all()
+        return [r.to_dict() for r in rows]
+    finally:
+        db.close()
 
-    if not gw_ids:
-        # 网关没拿到(失败或空),用本地 MODELS 键
-        gw_ids = list(MODELS.keys())
 
-    # merge 本地覆盖层;网关有但本地无的走 resolve_model 兜底(label=原 id)
-    result = []
-    for mid in gw_ids:
-        mi = resolve_model(mid)
-        result.append({
-            "id": mid,
-            "label": mi["label"],
-            "context_window": mi["context_window"],
-            "supports_reasoning": mi["supports_reasoning"],
-        })
-    return result
+@router.get("/{model_pk}")
+async def get_model(model_pk: str, user: dict = Depends(get_current_user)):
+    db = SessionLocal()
+    try:
+        m = db.get(Model, model_pk)
+        if not m:
+            raise HTTPException(404, "模型不存在")
+        if user["role"] == "user" and not m.is_published:
+            raise HTTPException(403, "无权查看未发布模型")
+        return m.to_dict()
+    finally:
+        db.close()
+
+
+@router.post("")
+async def create_model(req: ModelRequest, user: dict = Depends(require_role("builder", "admin"))):
+    db = SessionLocal()
+    try:
+        # model_id 唯一(同一网关模型只能配一条)
+        if db.query(Model).filter(Model.model_id == req.model_id).first():
+            raise HTTPException(400, "模型 id 已存在")
+        m = Model(
+            model_id=req.model_id, label=req.label,
+            max_tokens=req.max_tokens, context_window=req.context_window,
+            supports_reasoning=req.supports_reasoning,
+            owner_id=user["username"], is_published=req.is_published,
+        )
+        db.add(m)
+        db.commit()
+        db.refresh(m)
+        return m.to_dict()
+    finally:
+        db.close()
+
+
+@router.put("/{model_pk}")
+async def update_model(model_pk: str, req: ModelRequest, user: dict = Depends(require_role("builder", "admin"))):
+    db = SessionLocal()
+    try:
+        m = db.get(Model, model_pk)
+        if not m:
+            raise HTTPException(404, "模型不存在")
+        if m.owner_id != user["username"] and user["role"] != "admin":
+            raise HTTPException(403, "只能编辑自己的模型")
+        # model_id 改了要查重(排除自身)
+        if req.model_id != m.model_id:
+            if db.query(Model).filter(Model.model_id == req.model_id).first():
+                raise HTTPException(400, "模型 id 已存在")
+        m.model_id = req.model_id
+        m.label = req.label
+        m.max_tokens = req.max_tokens
+        m.context_window = req.context_window
+        m.supports_reasoning = req.supports_reasoning
+        m.is_published = req.is_published
+        db.commit()
+        return m.to_dict()
+    finally:
+        db.close()
+
+
+@router.delete("/{model_pk}")
+async def delete_model(model_pk: str, user: dict = Depends(require_role("builder", "admin"))):
+    db = SessionLocal()
+    try:
+        m = db.get(Model, model_pk)
+        if not m:
+            raise HTTPException(404, "模型不存在")
+        if m.owner_id != user["username"] and user["role"] != "admin":
+            raise HTTPException(403, "只能删除自己的模型")
+        db.delete(m)
+        db.commit()
+        return {"deleted": model_pk}
+    finally:
+        db.close()
