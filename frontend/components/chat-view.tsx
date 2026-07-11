@@ -207,6 +207,19 @@ function FileSystemToolGroup({ tools }: { tools: ChatMessage["tools"] }) {
   );
 }
 
+function TypingIndicator() {
+  // ChatGPT 风格三点跳动:streaming 且尚无 content 时,在 AI 消息位置显示,
+  // 让用户明确感知后台在运行(尤其 reasoning 阶段 2-4 分钟无文本)。
+  // 用 animate-pulse(Tailwind 默认带,已验证可用)+ 错开 delay 模拟跳动。
+  return (
+    <div className="flex items-center gap-1 py-2" aria-label="正在思考">
+      <span className="size-2 animate-pulse rounded-full bg-foreground/50 [animation-delay:-0.3s]" />
+      <span className="size-2 animate-pulse rounded-full bg-foreground/50 [animation-delay:-0.15s]" />
+      <span className="size-2 animate-pulse rounded-full bg-foreground/50" />
+    </div>
+  );
+}
+
 function SandboxExecCard({ exec }: { exec: SandboxExec }) {
   const [open, setOpen] = useState(false);
   return (
@@ -534,6 +547,9 @@ export function ChatView() {
           {messages.map((msg) => (
             <Message key={msg.id} from={msg.from}>
               <MessageContent>
+                {/* ⓪ 思考反馈(ChatGPT 风格三点跳动):streaming 且尚无文本回复时显示,
+                    让用户明确感知后台在运行(尤其 reasoning 阶段长等待)。有 content 后消失。 */}
+                {msg.from === "assistant" && status === "streaming" && !msg.content && <TypingIndicator />}
                 {/* ① 推理过程(可折叠;仅推理模型产生)。
                     streaming 时即使无 reasoning 文本(langchain 可能丢弃 DeepSeek 的
                     delta.reasoning 字段)也显示"思考中…"指示,避免用户长等待无反馈。 */}
