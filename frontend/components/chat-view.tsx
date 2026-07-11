@@ -32,6 +32,8 @@ import { useChatSocket, type ChatMessage, type SandboxExec, type TodoItem } from
 import { useAuth, API_BASE } from "@/contexts/auth-context";
 import { useUI } from "@/contexts/ui-context";
 import { ArtifactsPanel } from "@/components/artifacts-panel";
+import { ResizeHandle } from "@/components/resize-handle";
+import { CONV_MIN, CONV_MAX, ART_MIN, ART_MAX } from "@/contexts/ui-context";
 
 function buildWsUrl(token: string, sessionId?: string | null): string {
   if (typeof window === "undefined") return "ws://localhost:8000/ws/chat";
@@ -364,7 +366,7 @@ function MessageMeta({ msg }: { msg: ChatMessage }) {
 
 export function ChatView() {
   const { user } = useAuth();
-  const { artifactsCollapsed, toggleArtifacts, conversationsCollapsed, toggleConversations } = useUI();
+  const { artifactsCollapsed, toggleArtifacts, conversationsCollapsed, toggleConversations, conversationsWidth, setConversationsWidth, artifactsWidth, setArtifactsWidth } = useUI();
   const router = useRouter();
   const searchParams = useSearchParams();
   // 会话恢复(§2.4):URL ?session=xxx 携带要恢复的会话 id。
@@ -493,8 +495,19 @@ export function ChatView() {
 
   return (
     <div className="flex h-full">
-      {/* 会话列表左面板(可折叠:展开 w-64 / 折叠 w-12 rail) */}
-      <aside className={`flex shrink-0 flex-col border-r bg-muted/30 transition-[width] duration-200 ${conversationsCollapsed ? "w-12" : "w-64"}`}>
+      {/* 会话列表左面板(可折叠:展开 conversationsWidth / 折叠 w-12 rail) */}
+      <aside
+        className={`relative flex shrink-0 flex-col border-r bg-muted/30 ${conversationsCollapsed ? "w-12 transition-[width] duration-200" : ""}`}
+        style={conversationsCollapsed ? undefined : { width: conversationsWidth }}
+      >
+        {/* 右边缘拖拽手柄(仅展开态):调会话面板宽度;向左拖过最小值 32px 自动折叠。 */}
+        {!conversationsCollapsed && (
+          <ResizeHandle
+            side="right"
+            onResize={(delta) => setConversationsWidth(Math.min(CONV_MAX, Math.max(CONV_MIN, conversationsWidth + delta)))}
+            onMin={() => toggleConversations()}
+          />
+        )}
         {/* 顶部:新建 / 展开-折叠 */}
         <div className={`flex items-center gap-1 border-b p-2 ${conversationsCollapsed ? "flex-col" : "justify-between"}`}>
           {conversationsCollapsed ? (
@@ -768,6 +781,9 @@ export function ChatView() {
           token={user.token}
           refreshKey={artifactRefresh}
           onCollapse={toggleArtifacts}
+          width={artifactsWidth}
+          onResize={(delta) => setArtifactsWidth(Math.min(ART_MAX, Math.max(ART_MIN, artifactsWidth + delta)))}
+          onMin={() => toggleArtifacts()}
         />
       )}
     </div>

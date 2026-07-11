@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { API_BASE } from "@/contexts/auth-context";
+import { ResizeHandle } from "@/components/resize-handle";
 import {
   FileTree, FileTreeFile, FileTreeFolder, FileTreeIcon, FileTreeName, FileTreeActions,
 } from "@/components/ai-elements/file-tree";
@@ -109,11 +110,17 @@ function renderNodes(nodes: TreeNode[], downloadUrl: (n: string) => string): Rea
   });
 }
 
-export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
+export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse, width, onResize, onMin }: {
   sessionId: string | null;
   token: string;
   refreshKey?: number;
   onCollapse?: () => void;
+  /** 面板宽度(px,来自 ui-context) */
+  width: number;
+  /** 拖拽手柄回调(delta>0=加宽) */
+  onResize?: (delta: number) => void;
+  /** 拖到最小值以下自动折叠 */
+  onMin?: () => void;
 }) {
   const [items, setItems] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(false);
@@ -165,7 +172,11 @@ export function ArtifactsPanel({ sessionId, token, refreshKey, onCollapse }: {
   const is3D = selectedArtifact && (STEP_TYPES.includes(selectedArtifact.type) || MESH_TYPES.includes(selectedArtifact.type));
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l bg-background">
+    <aside className="relative flex shrink-0 flex-col border-l bg-background" style={{ width }}>
+      {/* 左边缘拖拽手柄:调产物面板宽度;向右拖过最小值 32px 自动折叠。 */}
+      {onResize && (
+        <ResizeHandle side="left" onResize={onResize} onMin={onMin} />
+      )}
       <div className="flex items-center justify-between border-b px-3 py-2">
         <div className="flex items-center gap-1.5">
           <PackageIcon className="size-4 text-muted-foreground" />

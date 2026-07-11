@@ -8,7 +8,8 @@ import {
   MessageSquareIcon, WrenchIcon, ServerIcon, BoxesIcon, LayoutDashboardIcon,
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
-import { useUI } from "@/contexts/ui-context";
+import { useUI, SIDEBAR_MIN, SIDEBAR_MAX } from "@/contexts/ui-context";
+import { ResizeHandle } from "@/components/resize-handle";
 
 const ROLE_LABEL: Record<string, string> = {
   admin: "管理员", builder: "构建者(A类)", user: "使用者(B类)",
@@ -16,7 +17,7 @@ const ROLE_LABEL: Record<string, string> = {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const { sidebarCollapsed: collapsed } = useUI();
+  const { sidebarCollapsed: collapsed, sidebarWidth, setSidebarWidth } = useUI();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -40,10 +41,18 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`flex flex-col border-r bg-muted/50 transition-[width] duration-200 ease-in-out ${
-        collapsed ? "w-16" : "w-64"
+      className={`relative flex flex-col border-r bg-muted/50 ${
+        collapsed ? "w-16 transition-[width] duration-200" : ""
       }`}
+      style={collapsed ? undefined : { width: sidebarWidth }}
     >
+      {/* 右边缘拖拽手柄(仅展开态):调主侧栏宽度。折叠态不放手柄(避免误触展开)。 */}
+      {!collapsed && (
+        <ResizeHandle
+          side="right"
+          onResize={(delta) => setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth + delta)))}
+        />
+      )}
       {/* Logo:折叠态只留图标 */}
       <div className={`flex items-center gap-2 px-4 py-4 ${collapsed ? "justify-center px-0" : ""}`}>
         <PlaneIcon className="size-5 shrink-0 text-primary" />
