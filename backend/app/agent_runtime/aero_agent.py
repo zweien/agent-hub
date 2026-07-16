@@ -133,6 +133,7 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
     register_builtin("run_aero_tool", run_aero_tool)
     register_builtin("run_sweep_in_sandbox", _sweep_with_confirm)
     register_builtin("run_in_sandbox", run_in_sandbox)
+    register_builtin("search_knowledge", search_knowledge)
 
     # 工具加载(§8 工具选择 + 统一工具管理):
     #   enabled_tools 含内置名(run_aero_tool)+ 用户工具 id(tool_xxx)
@@ -304,6 +305,32 @@ def run_in_sandbox(command: str) -> str:
     if r.stderr:
         out += f"\n[stderr]\n{r.stderr}"
     return f"{out}\n[exit {r.exit_code}]"
+
+
+@tool
+async def search_knowledge(query: str) -> str:
+    """检索团队知识库(已上传的历史文档/案例/规范),返回相关片段。
+
+    用于:查找历史设计方案、优化决策、领域规则、规范文档等团队共享知识。
+    args:
+      query: 检索问题或关键词(自然语言)
+    返回:相关文档片段列表(含来源文件名);知识库为空或 embedding 未配时给出说明。
+    """
+    from app.knowledge.retrieval import search as kb_search
+    from app.knowledge.embedding import EmbeddingNotConfigured
+    try:
+        results = await kb_search(query, top_k=5)
+    except EmbeddingNotConfigured as e:
+        return f"知识库检索不可用(embedding 源未配置):{str(e)[:100]}"
+    except Exception as e:
+        return f"知识库检索出错:{type(e).__name__}: {str(e)[:150]}"
+    if not results:
+        return "知识库中暂无已就绪的文档可检索。"
+    lines = ["知识库检索结果(按相关度排序):"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"\n[{i}] 来源:{r['doc_filename']}(块 {r['chunk_index']}, 相似度 {r['score']})")
+        lines.append(r["text"])
+    return "\n".join(lines)
 
 
 def _run_sweep_raw(session_id: str, area: float, ar_start: float, ar_end: float, ar_step: float) -> str:

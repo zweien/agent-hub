@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   PlaneIcon, SettingsIcon, LogOutIcon, HistoryIcon, PuzzleIcon,
   MessageSquareIcon, WrenchIcon, ServerIcon, BoxesIcon, LayoutDashboardIcon,
+  BookOpenIcon,
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import { useUI, SIDEBAR_MIN, SIDEBAR_MAX } from "@/contexts/ui-context";
@@ -75,6 +76,7 @@ export function Sidebar() {
         {navItem("/tools", <WrenchIcon className="size-4 shrink-0" />, "工具管理")}
         {navItem("/models", <BoxesIcon className="size-4 shrink-0" />, "模型管理")}
         {navItem("/skills", <PuzzleIcon className="size-4 shrink-0" />, "技能管理")}
+        {navItem("/knowledge", <BookOpenIcon className="size-4 shrink-0" />, "知识库")}
         {navItem("/sandbox-templates", <BoxesIcon className="size-4 shrink-0" />, "沙箱模板")}
         {navItem("/sessions", <HistoryIcon className="size-4 shrink-0" />, "会话回放")}
         {user?.role === "admin" && navItem("/sandboxes", <ServerIcon className="size-4 shrink-0" />, "沙箱管理")}

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.config import get_settings
@@ -49,7 +49,10 @@ def init_db():
     create_all 不改已有表结构,故对新增列做幂等 ALTER(开发期迁移)。
     """
     # 确保所有 model 被导入,Base.metadata 才知道它们
-    from app.models import event, session, user, agent_config, skill, tool, sandbox_template, model  # noqa: F401
+    from app.models import event, session, user, agent_config, skill, tool, sandbox_template, model, knowledge_doc  # noqa: F401
+    # pgvector 扩展(知识库 §3 用):幂等创建,需在 create_all 之前(否则 Vector 列建表会失败)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind=engine)
     # 幂等迁移:agent_configs 加 skill_ids / sandbox_template_id(已有表,create_all 不会加列)
     _ensure_column("agent_configs", "skill_ids", "JSONB NOT NULL DEFAULT '[]'::jsonb")

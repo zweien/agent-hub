@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     #   deepseek-v4-flash ~64k;按真实窗口填,不同模型可经 .env 覆盖。
     llm_context_window: int = Field(default=65536)
 
+    # —— 知识库 embedding(V2 §3,ADR-0001)——
+    # Gateway 当前无 embedding channel,需运维配。配好后 embed_texts 走 OpenAI 兼容
+    # /embeddings,此 model 名要与运维在网关配的 channel 一致(默认 bge-m3,1024 维)。
+    kb_embedding_model: str = Field(default="bge-m3")
+
     # —— 沙箱(§3,A2 会话级容器)——
     # 默认用预装了气动依赖的自定义镜像(避免 per-session 容器每次 pip install aerosandbox 耗时/OOM)
     sandbox_image: str = Field(default="agent-hub-sandbox:latest")
