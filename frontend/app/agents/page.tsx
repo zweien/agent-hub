@@ -10,13 +10,24 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
 } from "@/components/ui/sheet";
 import { useToast } from "@/components/ui/toast";
-import { PlusIcon, SearchIcon, PencilIcon } from "lucide-react";
+import { PlusIcon, SearchIcon, PencilIcon, TrashIcon } from "lucide-react";
 
 interface AgentConfig {
   id: string; name: string; system_prompt: string;
   tools: string[]; skill_ids: string[]; sandbox_template_id: string | null;
   model: string; mode: string;
+  type: string;  // flat | canvas
+  subagent_types: SubagentType[];
   owner_id: string; is_published: boolean;
+}
+
+// 子代理类型(V2 §4):主 agent 调 task 工具时按 name spawn
+interface SubagentType {
+  name: string;
+  description: string;
+  prompt: string;
+  tools: string[];
+  model: string;
 }
 
 interface SkillBrief { id: string; name: string; description: string; is_published: boolean }
@@ -244,6 +255,8 @@ function ConfigDetail({
   const [sbTemplateId, setSbTemplateId] = useState<string>(config?.sandbox_template_id || "");
   const [model, setModel] = useState(config?.model || "deepseek-v4-flash");
   const [mode, setMode] = useState(config?.mode || "standard");
+  const [agentType, setAgentType] = useState(config?.type || "flat");
+  const [subagentTypes, setSubagentTypes] = useState<SubagentType[]>(config?.subagent_types || []);
   const [published, setPublished] = useState(config?.is_published || false);
 
   // config 变化时重置表单(切换不同卡片)
@@ -255,6 +268,8 @@ function ConfigDetail({
     setSbTemplateId(config?.sandbox_template_id || "");
     setModel(config?.model || "deepseek-v4-flash");
     setMode(config?.mode || "standard");
+    setAgentType(config?.type || "flat");
+    setSubagentTypes(config?.subagent_types || []);
     setPublished(config?.is_published || false);
   }, [config?.id]);
 
@@ -262,7 +277,8 @@ function ConfigDetail({
     const body = {
       name, system_prompt: prompt, tools, skill_ids: skillIds,
       sandbox_template_id: sbTemplateId || null,
-      model, mode, is_published: published,
+      model, mode, type: agentType, subagent_types: subagentTypes,
+      is_published: published,
     };
     const url = config ? `${API_BASE}/agents/${config.id}` : `${API_BASE}/agents`;
     const method = config ? "PUT" : "POST";
@@ -347,6 +363,91 @@ function ConfigDetail({
               <p className="text-sm">{MODE_LABEL[config?.mode || ""] || config?.mode}</p>
             )}
           </div>
+        </div>
+
+        {/* Agent 类型(flat 默认;canvas V2 后续段,先禁用) */}
+        <div>
+          <label className="mb-1 block text-sm font-medium">类型</label>
+          {editing ? (
+            <select className="w-full rounded-md border px-3 py-2 text-sm" value={agentType} onChange={e => setAgentType(e.target.value)} disabled={!canEdit}>
+              <option value="flat">扁平(单 agent 循环)</option>
+              <option value="canvas" disabled>画布编排(V2 后续)</option>
+            </select>
+          ) : (
+            <p className="text-sm">{config?.type === "canvas" ? "画布编排" : "扁平"}</p>
+          )}
+        </div>
+
+        {/* 子代理类型(V2 §4):主 agent 调 task 工具按名 spawn */}
+        <div>
+          <label className="mb-1 flex items-center justify-between text-sm font-medium">
+            <span>子代理类型 <span className="text-xs text-muted-foreground">(主 agent 可委派的命名子任务)</span></span>
+            {editing && canEdit && (
+              <button type="button" onClick={() => setSubagentTypes([...subagentTypes, { name: "", description: "", prompt: "", tools: [], model: "" }])}
+                className="text-xs text-primary hover:underline">+ 添加</button>
+            )}
+          </label>
+          {editing ? (
+            <div className="space-y-2">
+              {subagentTypes.length === 0 && (
+                <p className="text-xs text-muted-foreground">未配置子代理。主 agent 将不能委派子任务。</p>
+              )}
+              {subagentTypes.map((st, idx) => (
+                <div key={idx} className="space-y-1.5 rounded-md border p-2">
+                  <div className="flex gap-2">
+                    <input className="flex-1 rounded border px-2 py-1 text-sm" placeholder="名称(如 researcher)"
+                      value={st.name} disabled={!canEdit}
+                      onChange={e => setSubagentTypes(subagentTypes.map((x, i) => i === idx ? { ...x, name: e.target.value } : x))} />
+                    {canEdit && (
+                      <button type="button" className="shrink-0 text-destructive hover:text-destructive/80" title="删除"
+                        onClick={() => setSubagentTypes(subagentTypes.filter((_, i) => i !== idx))}>
+                        <TrashIcon className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <input className="w-full rounded border px-2 py-1 text-sm" placeholder="描述(主 agent 据此决定何时委派)"
+                    value={st.description} disabled={!canEdit}
+                    onChange={e => setSubagentTypes(subagentTypes.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} />
+                  <textarea className="min-h-16 w-full rounded border px-2 py-1 text-xs" placeholder="system prompt"
+                    value={st.prompt} disabled={!canEdit}
+                    onChange={e => setSubagentTypes(subagentTypes.map((x, i) => i === idx ? { ...x, prompt: e.target.value } : x))} />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground shrink-0">工具(空=继承父)</span>
+                    <select className="flex-1 rounded border px-2 py-1 text-xs" value={st.model} disabled={!canEdit}
+                      onChange={e => setSubagentTypes(subagentTypes.map((x, i) => i === idx ? { ...x, model: e.target.value } : x))}>
+                      <option value="">模型(继承父)</option>
+                      {(models.length ? models : [{ id: model, label: model }]).map((m) => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {/* 工具复选:沿用父 agent 工具池 */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {availTools.map(t => {
+                      const ref = t.id.startsWith("tool_") ? t.id : t.name;
+                      return (
+                        <label key={t.id} className="flex items-center gap-1 rounded bg-muted/50 px-1.5 py-0.5 text-xs">
+                          <input type="checkbox" checked={st.tools.includes(ref)} disabled={!canEdit}
+                            onChange={e => setSubagentTypes(subagentTypes.map((x, i) => i === idx ? {
+                              ...x, tools: e.target.checked ? [...x.tools, ref] : x.tools.filter((tt: string) => tt !== ref)
+                            } : x))} />
+                          {t.name}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {(config?.subagent_types || []).length === 0 ? (
+                <span className="text-sm text-muted-foreground">无子代理</span>
+              ) : (config?.subagent_types || []).map((st, i) => (
+                <span key={i} className="rounded bg-violet-50 px-1.5 py-0.5 text-xs text-violet-700">{st.name || "(未命名)"}</span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 工具 */}

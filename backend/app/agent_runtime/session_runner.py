@@ -80,6 +80,8 @@ class SessionState:
     skill_ids: list = field(default_factory=list)
     # 引用的沙箱模板(grilling:预置包+硬件配置);空=全局默认
     sandbox_template_id: str = ""
+    # 子代理类型定义(V2 §4):从 AgentConfig 读,透传给 build_agent 挂 SubAgentMiddleware
+    subagent_types: list = field(default_factory=list)
     # 会话级容器(A2 决策:1会话=1容器)
     container_name: str = ""
     last_activity_at: float = field(default_factory=time.time)  # 空闲回收计时
@@ -191,6 +193,7 @@ class SessionRegistry:
                     state.model = cfg_model
                     state.skill_ids = list(cfg.skill_ids or [])
                     state.sandbox_template_id = cfg.sandbox_template_id or ""
+                    state.subagent_types = list(cfg.subagent_types or [])
             finally:
                 db.close()
         # A2:会话级容器——首条消息时起独立容器 + 同步 skills 进容器
@@ -226,7 +229,7 @@ class SessionRegistry:
                 effective_prompt = cfg_prompt
                 if cfg_prompt and "{SESSION_ID}" in cfg_prompt:
                     effective_prompt = cfg_prompt.replace("{SESSION_ID}", session_id)
-                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=effective_prompt, session_id=session_id):
+                async for event in astream_agent(user_input, model=state.model, enabled_tools=state.enabled_tools, system_prompt=effective_prompt, session_id=session_id, subagent_types=state.subagent_types):
                     # 接管门控(§2.3 C1):被 clear 时在此挂起,直到交还(set)
                     await state.resume_event.wait()
                     # 熔断计数(§5.4):token 不计入轮数;tool_start 才算一轮

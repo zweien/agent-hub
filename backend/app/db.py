@@ -54,6 +54,9 @@ def init_db():
     # 幂等迁移:agent_configs 加 skill_ids / sandbox_template_id(已有表,create_all 不会加列)
     _ensure_column("agent_configs", "skill_ids", "JSONB NOT NULL DEFAULT '[]'::jsonb")
     _ensure_column("agent_configs", "sandbox_template_id", "VARCHAR(64)")
+    # V2 §4:agent 形态(flat|canvas)+ 子代理类型定义(JSONB 列表)
+    _ensure_column("agent_configs", "type", "VARCHAR(24) NOT NULL DEFAULT 'flat'")
+    _ensure_column("agent_configs", "subagent_types", "JSONB NOT NULL DEFAULT '[]'::jsonb")
     db = SessionLocal()
     try:
         # 插默认气动 agent 配置(若表空)

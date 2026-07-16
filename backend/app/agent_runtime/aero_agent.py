@@ -100,12 +100,15 @@ def run_aero(*, span=10.0, area=10.0, alpha_deg=3.0, cd0=0.01, n_segs=8):
 from app.tools.aero import run_aero_tool  # noqa: E402
 
 
-def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt: str = ""):
+def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt: str = "",
+                subagent_types: list | None = None):
     """构建 Deep Agent(路线B:deepagents create_deep_agent + skills/filesystem middleware)。
 
     model: 会话级模型覆盖(空=用 config 默认)
     enabled_tools: 启用的工具名集合(空=全部)。
     system_prompt: agent system prompt(空=用默认气动 prompt;§8 配置面传入)
+    subagent_types: 子代理类型定义(V2 §4),[{name,description,prompt,tools[],model}];
+        非空时挂 SubAgentMiddleware,主 agent 调 task 工具按名 spawn。
 
     skills 接入(§4.6):SkillsMiddleware + FilesystemMiddleware 共用 DockerContainerBackend,
     指向【会话容器】的 /workspace/skills/。agent 的 read_file/ls 与 skills 发现路径空间统一。
@@ -178,6 +181,49 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
             # 子代理经 default_tools 继承(SubAgent 文档:未指定 tools 则继承父)。
             if run_in_sandbox not in tools:
                 tools = [*tools, run_in_sandbox]
+            # V2 §4 子代理委派:把 AgentConfig.subagent_types 编译成 deepagents SubAgent spec。
+            # create_deep_agent(subagents=..., backend=...) 自动构建 SubAgentMiddleware 并
+            # 转发上面这个 backend(子代理共享会话容器)。create_sub_agent 硬要求每条 spec 有
+            # model + tools,故这里显式填默认值。
+            # ⚠️ model 必须传 BaseChatModel 对象(非字符串):deepagents resolve_model 对字符串
+            # 走 init_chat_model,会按模型名前缀猜 provider(deepseek-xxx → 需 langchain-deepseek
+            # 包,且丢失我们的网关 base_url/api_key)。传 ChatOpenAI 对象则原样复用,保留网关配置。
+            if subagent_types:
+                try:
+                    compiled = []
+                    for st in subagent_types:
+                        name = (st.get("name") or "").strip()
+                        if not name:
+                            continue  # 跳过无名条目
+                        spec_tools = st.get("tools") or []
+                        # 空 tools → 继承父 tools(此时已含 run_in_sandbox),保证子代理不裸奔
+                        sub_tools = load_tools(list(spec_tools)) if spec_tools else list(tools)
+                        # 子代理模型:spec 指定了不同 model_id → 用相同网关配置建新 ChatOpenAI;
+                        # 否则复用父 llm 对象(resolve_model 对 BaseChatModel 原样返回)
+                        spec_model_id = (st.get("model") or "").strip()
+                        if spec_model_id and spec_model_id != use_model:
+                            sub_mi = resolve_model(spec_model_id)
+                            sub_llm = ChatOpenAI(
+                                base_url=s.llm_base_url, api_key=s.llm_api_key, model=spec_model_id,
+                                max_tokens=sub_mi["max_tokens"], temperature=0.3,
+                                streaming=True, stream_usage=True,
+                                profile={"max_input_tokens": sub_mi["context_window"]},
+                            )
+                        else:
+                            sub_llm = llm  # 复用父 LLM 对象
+                        compiled.append({
+                            "name": name,
+                            "description": st.get("description") or name,
+                            "system_prompt": st.get("prompt") or "你是子代理,完成委派给你的子任务。",
+                            "model": sub_llm,
+                            "tools": sub_tools,
+                        })
+                    if compiled:
+                        extra_kwargs["subagents"] = compiled
+                        logger.info("build_agent 挂载 %d 个子代理类型(共享容器 backend)", len(compiled))
+                except Exception as e:
+                    # 子代理 spec 非法(工具名不存在等)→ 降级:不挂子代理,主 agent 仍可跑
+                    logger.warning("子代理类型编译失败(降级为无子代理):%s", e)
         except Exception as e:
             logger.warning("挂载 skills backend 失败(agent 仍可跑,但无 skill):%s", e)
 
@@ -309,7 +355,7 @@ def run(user_input: str, session_id: str = "") -> str:
     return final_text or "(agent 未产生最终文本)"
 
 
-async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = "", session_id: str = ""):
+async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = "", session_id: str = "", subagent_types: list | None = None):
     """异步流式运行 agent(WebSocket §2.3 用),产出事件 dict。
 
     session_id: 会话标识 → LangGraph thread_id。配 checkpointer 后,
@@ -327,7 +373,7 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
       - updates 拿工具调用开始(AIMessage.tool_calls)与结果(ToolMessage)
     """
     from langchain_core.messages import AIMessageChunk, ToolMessage
-    agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt)
+    agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt, subagent_types=subagent_types)
     inputs = {"messages": [("user", user_input)]}
     # thread_id 关联 checkpointer:LangGraph 自动加载该 thread 的历史 messages,
     # 本轮只追加新用户消息(修复"对话无上下文"bug)。

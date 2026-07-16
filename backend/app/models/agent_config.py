@@ -30,6 +30,12 @@ class AgentConfig(Base):
     sandbox_template_id = Column(String(64), nullable=True)
     model = Column(String(64), nullable=False, default="deepseek-v4-flash")
     mode = Column(String(24), nullable=False, default="standard")  # strict/standard/yolo
+    # agent 形态:flat(单 LLM+工具循环,默认)/ canvas(画布编排,V2 后续段)。
+    # 现仅 flat 在运行时生效;canvas 字段先就位,编译器未实现。
+    type = Column(String(24), nullable=False, default="flat")
+    # 子代理类型定义(V2 §4 子代理委派):[{name, description, prompt, tools[], model}]。
+    # build_agent 转为 deepagents SubAgent spec,主 agent 调 task 工具按名 spawn。
+    subagent_types = Column(JSONB, nullable=False, default=list)
     owner_id = Column(String(64), nullable=False)  # 创建者 username
     is_published = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -41,5 +47,6 @@ class AgentConfig(Base):
             "tools": self.tools, "skill_ids": self.skill_ids,
             "sandbox_template_id": self.sandbox_template_id,
             "model": self.model, "mode": self.mode,
+            "type": self.type, "subagent_types": self.subagent_types,
             "owner_id": self.owner_id, "is_published": self.is_published,
         }
