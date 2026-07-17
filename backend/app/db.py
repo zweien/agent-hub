@@ -60,6 +60,8 @@ def init_db():
     # V2 §4:agent 形态(flat|canvas)+ 子代理类型定义(JSONB 列表)
     _ensure_column("agent_configs", "type", "VARCHAR(24) NOT NULL DEFAULT 'flat'")
     _ensure_column("agent_configs", "subagent_types", "JSONB NOT NULL DEFAULT '[]'::jsonb")
+    # V2 §5:画布图定义(JSONB,仅 type=canvas 用)
+    _ensure_column("agent_configs", "canvas_def", "JSONB NOT NULL DEFAULT '{}'::jsonb")
     db = SessionLocal()
     try:
         # 插默认气动 agent 配置(若表空)

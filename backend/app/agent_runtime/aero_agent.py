@@ -101,14 +101,16 @@ from app.tools.aero import run_aero_tool  # noqa: E402
 
 
 def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt: str = "",
-                subagent_types: list | None = None):
-    """构建 Deep Agent(路线B:deepagents create_deep_agent + skills/filesystem middleware)。
+                subagent_types: list | None = None, canvas_def: dict | None = None):
+    """构建 agent:flat(默认,create_deep_agent)或 canvas(compile_canvas,V2 §5)。
 
     model: 会话级模型覆盖(空=用 config 默认)
     enabled_tools: 启用的工具名集合(空=全部)。
     system_prompt: agent system prompt(空=用默认气动 prompt;§8 配置面传入)
     subagent_types: 子代理类型定义(V2 §4),[{name,description,prompt,tools[],model}];
         非空时挂 SubAgentMiddleware,主 agent 调 task 工具按名 spawn。
+    canvas_def: 画布图定义(V2 §5,仅 type=canvas)。非空时走 compile_canvas 编译为
+        StateGraph(ADR-0002);否则走 flat create_deep_agent。
 
     skills 接入(§4.6):SkillsMiddleware + FilesystemMiddleware 共用 DockerContainerBackend,
     指向【会话容器】的 /workspace/skills/。agent 的 read_file/ls 与 skills 发现路径空间统一。
@@ -117,6 +119,11 @@ def build_agent(model: str = "", enabled_tools: set | None = None, system_prompt
     if not s.llm_api_key:
         raise ValueError("LLM_API_KEY 未设置(配 .env)")
     use_model = model or s.llm_model
+    # V2 §5 分流:canvas_def 非空 → 编译画布图;否则走 flat
+    if canvas_def:
+        from app.agent_runtime.canvas_compiler import compile_canvas, CanvasCompileError
+        logger.info("build_agent: 编译画布图(canvas_def, model=%s)", use_model)
+        return compile_canvas(canvas_def, use_model, enabled_tools, subagent_types, _checkpointer)
     # 模型目录解析:max_tokens/context_window 目录优先,未命中回落全局(§8 模型选择)。
     mi = resolve_model(use_model)
     llm = ChatOpenAI(
@@ -382,7 +389,7 @@ def run(user_input: str, session_id: str = "") -> str:
     return final_text or "(agent 未产生最终文本)"
 
 
-async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = "", session_id: str = "", subagent_types: list | None = None):
+async def astream_agent(user_input: str, model: str = "", enabled_tools: set | None = None, system_prompt: str = "", session_id: str = "", subagent_types: list | None = None, canvas_def: dict | None = None):
     """异步流式运行 agent(WebSocket §2.3 用),产出事件 dict。
 
     session_id: 会话标识 → LangGraph thread_id。配 checkpointer 后,
@@ -400,7 +407,7 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
       - updates 拿工具调用开始(AIMessage.tool_calls)与结果(ToolMessage)
     """
     from langchain_core.messages import AIMessageChunk, ToolMessage
-    agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt, subagent_types=subagent_types)
+    agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt, subagent_types=subagent_types, canvas_def=canvas_def)
     inputs = {"messages": [("user", user_input)]}
     # thread_id 关联 checkpointer:LangGraph 自动加载该 thread 的历史 messages,
     # 本轮只追加新用户消息(修复"对话无上下文"bug)。

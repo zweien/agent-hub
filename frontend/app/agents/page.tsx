@@ -10,7 +10,8 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
 } from "@/components/ui/sheet";
 import { useToast } from "@/components/ui/toast";
-import { PlusIcon, SearchIcon, PencilIcon, TrashIcon } from "lucide-react";
+import { CanvasEditor } from "@/components/canvas-editor";
+import { PlusIcon, SearchIcon, PencilIcon, TrashIcon, WorkflowIcon } from "lucide-react";
 
 interface AgentConfig {
   id: string; name: string; system_prompt: string;
@@ -18,6 +19,7 @@ interface AgentConfig {
   model: string; mode: string;
   type: string;  // flat | canvas
   subagent_types: SubagentType[];
+  canvas_def: Record<string, unknown>;  // 画布图定义(V2 §5,仅 type=canvas)
   owner_id: string; is_published: boolean;
 }
 
@@ -257,6 +259,8 @@ function ConfigDetail({
   const [mode, setMode] = useState(config?.mode || "standard");
   const [agentType, setAgentType] = useState(config?.type || "flat");
   const [subagentTypes, setSubagentTypes] = useState<SubagentType[]>(config?.subagent_types || []);
+  const [canvasDef, setCanvasDef] = useState<Record<string, unknown>>(config?.canvas_def || {});
+  const [canvasOpen, setCanvasOpen] = useState(false);
   const [published, setPublished] = useState(config?.is_published || false);
 
   // config 变化时重置表单(切换不同卡片)
@@ -270,6 +274,7 @@ function ConfigDetail({
     setMode(config?.mode || "standard");
     setAgentType(config?.type || "flat");
     setSubagentTypes(config?.subagent_types || []);
+    setCanvasDef(config?.canvas_def || {});
     setPublished(config?.is_published || false);
   }, [config?.id]);
 
@@ -278,6 +283,7 @@ function ConfigDetail({
       name, system_prompt: prompt, tools, skill_ids: skillIds,
       sandbox_template_id: sbTemplateId || null,
       model, mode, type: agentType, subagent_types: subagentTypes,
+      canvas_def: canvasDef,
       is_published: published,
     };
     const url = config ? `${API_BASE}/agents/${config.id}` : `${API_BASE}/agents`;
@@ -365,18 +371,35 @@ function ConfigDetail({
           </div>
         </div>
 
-        {/* Agent 类型(flat 默认;canvas V2 后续段,先禁用) */}
+        {/* Agent 类型(flat 默认;canvas V2 §5 画布编排) */}
         <div>
           <label className="mb-1 block text-sm font-medium">类型</label>
           {editing ? (
-            <select className="w-full rounded-md border px-3 py-2 text-sm" value={agentType} onChange={e => setAgentType(e.target.value)} disabled={!canEdit}>
-              <option value="flat">扁平(单 agent 循环)</option>
-              <option value="canvas" disabled>画布编排(V2 后续)</option>
-            </select>
+            <div className="flex gap-2">
+              <select className="flex-1 rounded-md border px-3 py-2 text-sm" value={agentType} onChange={e => setAgentType(e.target.value)} disabled={!canEdit}>
+                <option value="flat">扁平(单 agent 循环)</option>
+                <option value="canvas">画布编排</option>
+              </select>
+              {agentType === "canvas" && (
+                <Button type="button" size="sm" variant="outline" onClick={() => setCanvasOpen(true)} disabled={!canEdit}>
+                  <WorkflowIcon className="size-3.5" /> 编辑画布
+                </Button>
+              )}
+            </div>
           ) : (
-            <p className="text-sm">{config?.type === "canvas" ? "画布编排" : "扁平"}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm">{config?.type === "canvas" ? "画布编排" : "扁平"}</p>
+              {config?.type === "canvas" && (
+                <Button type="button" size="sm" variant="outline" onClick={() => setCanvasOpen(true)}>
+                  <WorkflowIcon className="size-3.5" /> 查看画布
+                </Button>
+              )}
+            </div>
           )}
         </div>
+
+        {/* 画布编辑器(全屏 overlay,仅 type=canvas 时打开) */}
+        <CanvasEditor open={canvasOpen} onOpenChange={setCanvasOpen} canvasDef={canvasDef} onChange={setCanvasDef} canEdit={canEdit} />
 
         {/* 子代理类型(V2 §4):主 agent 调 task 工具按名 spawn */}
         <div>

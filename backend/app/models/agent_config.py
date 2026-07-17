@@ -36,6 +36,9 @@ class AgentConfig(Base):
     # 子代理类型定义(V2 §4 子代理委派):[{name, description, prompt, tools[], model}]。
     # build_agent 转为 deepagents SubAgent spec,主 agent 调 task 工具按名 spawn。
     subagent_types = Column(JSONB, nullable=False, default=list)
+    # 画布图定义(V2 §5,仅 type=canvas 用):{nodes:[{id,type,data}], edges:[{source,target,...}],
+    # entry_node_id}。运行时 compile_canvas 编译为 LangGraph StateGraph(ADR-0002)。
+    canvas_def = Column(JSONB, nullable=False, default=dict)
     owner_id = Column(String(64), nullable=False)  # 创建者 username
     is_published = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -48,5 +51,6 @@ class AgentConfig(Base):
             "sandbox_template_id": self.sandbox_template_id,
             "model": self.model, "mode": self.mode,
             "type": self.type, "subagent_types": self.subagent_types,
+            "canvas_def": self.canvas_def,
             "owner_id": self.owner_id, "is_published": self.is_published,
         }
