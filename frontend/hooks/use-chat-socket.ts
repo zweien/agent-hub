@@ -32,6 +32,8 @@ export type WsEvent =
   | { type: "sandbox_exec"; command: string; exit_code: number; stdout: string; stderr: string; duration_s: number }
   | { type: "control_ack"; ok: boolean; message: string }
   | { type: "done"; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; elapsed_s?: number }
+  | { type: "hitl_interrupt"; value: unknown; interrupt_id?: string }
+  | { type: "hitl_resumed"; value: unknown }
   | { type: "error"; message: string };
 
 // ===== 消息状态(渲染用) =====
@@ -72,6 +74,8 @@ export interface ChatMessage {
   /** 上下文已压缩(deepagents SummarizationMiddleware 触发后的提示) */
   compacted?: { summary: string; file_path?: string };
   pendingConfirm?: { action_id: string; tool: string; args: Record<string, unknown> };
+  /** canvas HITL 节点(canvas-2)暂停等人工输入;value 含 prompt/上下文 */
+  pendingHitl?: { value: unknown; interrupt_id?: string };
   interrupted?: { reason: string; action_id?: string };
   /** 轻量系统提示(如并发拒绝),不改会话状态 */
   notice?: string;
@@ -221,6 +225,15 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
                 rebuilt[idx] = { ...rebuilt[idx], usage: d.usage, elapsed_s: d.elapsed_s };
               }
             }
+          } else if (ev.type === "hitl_interrupt") {
+            // canvas HITL 暂停(重连回放):贴到当前 AI 消息
+            const hv = p as { value: unknown; interrupt_id?: string };
+            if (aiId) {
+              const idx = rebuilt.findIndex((m) => m.id === aiId);
+              if (idx >= 0) {
+                rebuilt[idx] = { ...rebuilt[idx], pendingHitl: { value: hv.value, interrupt_id: hv.interrupt_id } };
+              }
+            }
           }
         }
         messagesRef.current = rebuilt;
@@ -366,6 +379,24 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
         currentAiId.current = null;
         break;
       }
+      case "hitl_interrupt": {
+        // canvas HITL 节点暂停:把 value 贴到当前 AI 消息,status 留在 streaming→前端显示 HitlBar
+        setStatus("streaming");  // 保持非 ready,HitlBar 才显示
+        const aiId = ensureAiMsg();
+        setMsg((prev) => prev.map((m) =>
+          m.id === aiId ? { ...m, pendingHitl: { value: event.value, interrupt_id: event.interrupt_id } } : m
+        ));
+        break;
+      }
+      case "hitl_resumed": {
+        // 用户已提交 → 清 HitlBar,继续等后续 token/done
+        const aiId = currentAiId.current;
+        if (aiId) {
+          setMsg((prev) => prev.map((m) => m.id === aiId ? { ...m, pendingHitl: undefined } : m));
+        }
+        setStatus("streaming");
+        break;
+      }
       case "error":
         setStatus("error");
         break;
@@ -393,6 +424,11 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
   const recover = useCallback((action: string) => {
     wsRef.current?.send(JSON.stringify({ type: "recover", action }));
     setMsg((prev) => prev.map((m) => (m.interrupted ? { ...m, interrupted: undefined } : m)));
+  }, []);
+
+  // 上行:HITL 恢复(canvas-2)——把用户输入回传,后端 Command(resume) 继续
+  const resume = useCallback((value: string) => {
+    wsRef.current?.send(JSON.stringify({ type: "resume", value }));
   }, []);
 
   // 上行:接管
@@ -450,5 +486,5 @@ export function useChatSocket(url: string, initialSessionId?: string | null) {
     return () => wsRef.current?.close();
   }, [connect]);
 
-  return { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation, switchSession };
+  return { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, resume, takeover, cancel, setModel, setTools, setGuardMode, newConversation, switchSession };
 }

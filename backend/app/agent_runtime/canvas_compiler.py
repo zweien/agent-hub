@@ -39,8 +39,8 @@ class CanvasCompileError(ValueError):
     """画布图定义非法。message 含节点 id + 原因,供前端定位。"""
 
 
-# 节点类型枚举
-NODE_TYPES = ("entry", "exit", "llm", "tool", "subagent", "condition")
+# 节点类型枚举(canvas-2 加 hitl)
+NODE_TYPES = ("entry", "exit", "llm", "tool", "subagent", "condition", "hitl")
 
 
 def compile_canvas(
@@ -206,6 +206,25 @@ def compile_canvas(
                 # 子代理结果作为新 AI 消息回流(主链继续)
                 return {"messages": [AIMessage(content=f"[子代理 {_name} 结果]\n{resp.content}", name=_name)]}
             builder.add_node(nid, _subagent_node)
+            continue
+
+        if ntype == "hitl":
+            # HITL 节点(canvas-2):调 LangGraph interrupt(value) 暂停等人工输入。
+            # interrupt value 含 prompt(给前端渲染)+ 最后消息摘要;resume 后 answer
+            # 作为 HumanMessage 回流,后续节点可读。需 checkpointer(已用共享 MemorySaver)。
+            prompt = data.get("prompt", "需要你的输入:")
+
+            def _hitl_node(state, _prompt=prompt, _nid=nid):
+                from langgraph.types import interrupt
+                from langchain_core.messages import HumanMessage
+                # 取最后消息摘要给前端做上下文
+                msgs = state.get("messages", []) if isinstance(state, dict) else []
+                last = msgs[-1] if msgs else None
+                last_text = str(getattr(last, "content", last or ""))[:500]
+                answer = interrupt({"prompt": _prompt, "node_id": _nid, "last_message": last_text})
+                # resume 后:answer 作为 HumanMessage 回流(后续节点把当用户输入)
+                return {"messages": [HumanMessage(content=str(answer))]}
+            builder.add_node(nid, _hitl_node)
             continue
 
         if ntype == "condition":

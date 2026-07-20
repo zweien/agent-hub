@@ -20,7 +20,7 @@ import { XIcon, PlusIcon } from "lucide-react";
  * 输出 canvas_def JSON:{nodes, edges, entry_node_id},回传父组件保存。
  */
 
-export type CanvasNodeType = "entry" | "exit" | "llm" | "tool" | "subagent" | "condition";
+export type CanvasNodeType = "entry" | "exit" | "llm" | "tool" | "subagent" | "condition" | "hitl";
 
 interface CanvasNodeData {
   // 通用
@@ -44,6 +44,7 @@ const NODE_META: Record<CanvasNodeType, { label: string; color: string; desc: st
   tool: { label: "工具", color: "border-amber-400 bg-amber-50", desc: "调内置工具" },
   subagent: { label: "子代理", color: "border-violet-400 bg-violet-50", desc: "委派子代理" },
   condition: { label: "条件", color: "border-orange-400 bg-orange-50", desc: "按消息内容分支" },
+  hitl: { label: "人工输入", color: "border-pink-400 bg-pink-50", desc: "暂停等用户输入(Resume)" },
 };
 
 let _nodeSeq = 0;
@@ -64,6 +65,7 @@ function CanvasNode({ id, data, type, selected }: NodeProps) {
         {ntype === "tool" && (d.tool_name || "(未选工具)")}
         {ntype === "subagent" && (d.subagent_type || "(未选子代理)")}
         {ntype === "condition" && `${d.rules?.length || 0} 条规则`}
+        {ntype === "hitl" && (d.prompt?.slice(0, 30) || "暂停等输入")}
         {ntype === "entry" && "START"}
         {ntype === "exit" && "END"}
       </div>
@@ -79,7 +81,7 @@ function CanvasNode({ id, data, type, selected }: NodeProps) {
   );
 }
 
-const nodeTypes = { entry: CanvasNode, exit: CanvasNode, llm: CanvasNode, tool: CanvasNode, subagent: CanvasNode, condition: CanvasNode };
+const nodeTypes = { entry: CanvasNode, exit: CanvasNode, llm: CanvasNode, tool: CanvasNode, subagent: CanvasNode, condition: CanvasNode, hitl: CanvasNode };
 
 // —— 节点参数面板(右侧,选中节点时显示) ——
 function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; onChange: (id: string, data: Partial<CanvasNodeData>) => void }) {
@@ -139,6 +141,13 @@ function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; 
       )}
       {ntype === "entry" && <p className="text-xs text-muted-foreground">入口节点无参数。它会接 START,作为图执行的起点。</p>}
       {ntype === "exit" && <p className="text-xs text-muted-foreground">出口节点无参数。它接 END,结束图执行。</p>}
+      {ntype === "hitl" && (
+        <div>
+          <label className="mb-1 block text-xs font-medium">提示语(暂停时展示给用户)</label>
+          <Textarea className="min-h-16 text-xs" value={d.prompt || ""} onChange={e => onChange(node.id, { prompt: e.target.value })} placeholder="请确认以上方案,或输入修改意见…" />
+          <p className="mt-1.5 text-[11px] text-muted-foreground">执行到此节点时暂停,用户在对话框输入后点提交触发 Resume,图继续(输入作为新消息回流)。</p>
+        </div>
+      )}
     </div>
   );
 }

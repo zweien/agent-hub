@@ -12,6 +12,7 @@ import { Message, MessageContent, MessageResponse } from "@/components/ai-elemen
 import { Reasoning } from "@/components/ai-elements/reasoning";
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Collapsible, CollapsibleTrigger, CollapsibleContent,
 } from "@/components/ui/collapsible";
@@ -297,6 +298,32 @@ function RecoveryBar({ msg, onRecover }: { msg: ChatMessage; onRecover: (a: stri
   );
 }
 
+// HITL 输入栏(canvas-2):canvas hitl 节点暂停,提示用户输入 → 提交触发 resume
+function HitlBar({ msg, onResume }: { msg: ChatMessage; onResume: (value: string) => void }) {
+  const [val, setVal] = useState("");
+  if (!msg.pendingHitl) return null;
+  const v = msg.pendingHitl.value as { prompt?: string; node_id?: string; last_message?: string } | string | undefined;
+  const prompt = (typeof v === "object" && v ? v.prompt : undefined) || "需要你的输入";
+  const lastMsg = typeof v === "object" && v ? v.last_message : undefined;
+  return (
+    <div className="my-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+      <div className="mb-1 flex items-center gap-1.5 font-medium text-amber-800">
+        <HandIcon className="size-3.5" /> 等待你的输入
+      </div>
+      <div className="mb-2 text-xs text-amber-700">{prompt}</div>
+      {lastMsg && <div className="mb-2 max-h-24 overflow-auto rounded bg-white/60 p-1.5 text-xs text-muted-foreground">{lastMsg}</div>}
+      <div className="flex gap-2">
+        <Input className="flex-1 text-sm" placeholder="输入后回车提交…" value={val}
+          onChange={e => setVal(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && val.trim()) { onResume(val.trim()); setVal(""); } }} />
+        <Button size="sm" disabled={!val.trim()} onClick={() => { onResume(val.trim()); setVal(""); }}>
+          <ArrowUpIcon className="size-3.5" /> 提交
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function NoticeBar({ msg }: { msg: ChatMessage }) {
   // 轻量系统提示(如:并发拒绝)。不改会话状态,仅提示。
   if (!msg.notice) return null;
@@ -376,7 +403,7 @@ export function ChatView() {
   // newConversation 显式重置此 ref(配合 router.replace('/chat'))。
   const initialSessionRef = useRef<string | null>(searchParams.get("session"));
   const wsUrl = user ? buildWsUrl(user.token, initialSessionRef.current) : "";
-  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, takeover, cancel, setModel, setTools, setGuardMode, newConversation, switchSession } = useChatSocket(wsUrl, initialSessionRef.current);
+  const { messages, status, sessionId, sandboxUrl, takeoverActive, sendMessage, confirm, recover, resume, takeover, cancel, setModel, setTools, setGuardMode, newConversation, switchSession } = useChatSocket(wsUrl, initialSessionRef.current);
   const [input, setInput] = useState("");
   const [model, setLocalModel] = useState("deepseek-v4-flash");
   const [selectedTools, setSelectedTools] = useState<string[]>(["run_aero_tool", "run_sweep_in_sandbox"]);
@@ -639,6 +666,7 @@ export function ChatView() {
                 {msg.sandboxExecs?.map((ex, i) => <SandboxExecCard key={`sx${i}`} exec={ex} />)}
                 <ConfirmBar msg={msg} onConfirm={confirm} />
                 <RecoveryBar msg={msg} onRecover={recover} />
+                <HitlBar msg={msg} onResume={resume} />
                 {/* ⑦ 最终文本回复 */}
                 {msg.content && <MessageResponse className="prose-chat" urlTransform={urlTransform}>{msg.content}</MessageResponse>}
                 {/* ⑧ 本轮用量/耗时脚注(done 载荷) */}

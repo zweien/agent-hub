@@ -20,7 +20,7 @@ from typing import Any
 from app.db import SessionLocal
 from app.models.event import Event
 from app.models.session import Session
-from app.agent_runtime.aero_agent import astream_agent
+from app.agent_runtime.aero_agent import astream_agent, astream_resume_agent
 from app.agent_runtime.guardrails import Mode, Limits
 from app.config import get_settings
 
@@ -145,6 +145,12 @@ class SessionRegistry:
                 elif _et == "action_required":
                     # 工具前置确认(§5.4) → awaiting_user
                     sess.status = "awaiting_user"
+                elif _et == "hitl_interrupt":
+                    # canvas HITL 节点(canvas-2)调 interrupt 暂停 → awaiting_user(复用)
+                    sess.status = "awaiting_user"
+                elif _et == "hitl_resumed":
+                    # 用户提交 HITL 输入 → 恢复执行 → running
+                    sess.status = "running"
                 elif _et == "takeover_begin":
                     # 人机接管(§2.3 C1) → human_takeover
                     sess.status = "human_takeover"
@@ -418,6 +424,57 @@ class SessionRegistry:
             logger.info("失败恢复:接管 session=%s", session_id)
         else:
             logger.warning("未知 recover action=%s session=%s", action, session_id)
+
+    async def resume_interrupt(self, session_id: str, value):
+        """HITL 恢复(canvas-2):用户提交输入后,用 Command(resume=value) 继续执行。
+
+        仅当会话处于 awaiting_user(hitl_interrupt 后)且无活跃 task 时可用。
+        起新后台 task 调 astream_resume_agent(同 thread_id + 共享 checkpointer 恢复)。
+        """
+        state = self._get_or_create(session_id)
+        # 守卫:仅 awaiting_user 态可 resume;且无活跃 task(interrupt 已结束前 task)
+        db_sess = SessionLocal()
+        try:
+            sess = db_sess.get(Session, session_id)
+            cur_status = sess.status if sess else None
+        finally:
+            db_sess.close()
+        if cur_status != "awaiting_user":
+            self._persist_event(session_id, state,
+                {"type": "notice", "message": f"当前状态 {cur_status},无法恢复(需 awaiting_user)"}, actor="system")
+            return
+        if state.task and not state.task.done():
+            self._persist_event(session_id, state,
+                {"type": "notice", "message": "上一条消息还在处理中,无法恢复"}, actor="system")
+            return
+        # 写恢复事件(前端可据此清 HitlBar)→ 状态转 running
+        self._persist_event(session_id, state, {"type": "hitl_resumed", "value": value}, actor="user")
+
+        async def _run_resume():
+            global _current_session_state
+            _current_session_state = state
+            state.started_at = time.time()  # 重置耗时锚点
+            state.round_count = 0
+            try:
+                async for ev in astream_resume_agent(
+                    value, model=state.model, enabled_tools=state.enabled_tools,
+                    system_prompt=state.last_user_input or "", session_id=session_id,
+                    subagent_types=state.subagent_types, canvas_def=state.canvas_def,
+                ):
+                    await state.resume_event.wait()
+                    if ev.get("type") == "done":
+                        ev["elapsed_s"] = round(time.time() - state.started_at, 1)
+                    self._persist_event(session_id, state, ev, actor="agent")
+            except Exception as e:
+                logger.exception("resume task 异常 session=%s", session_id)
+                self._persist_event(session_id, state,
+                    {"type": "interrupted", "reason": f"恢复异常: {type(e).__name__}: {str(e)[:200]}"},
+                    actor="system")
+            finally:
+                _current_session_state = None
+
+        state.task = asyncio.create_task(_run_resume())
+        logger.info("HITL 恢复 session=%s", session_id)
 
     def _update_session_status(self, session_id: str, status: str):
         """更新 session 状态(私有)。"""

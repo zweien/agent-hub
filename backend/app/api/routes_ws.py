@@ -151,6 +151,13 @@ async def chat_ws(
                 await registry.recover(current_sid, msg.get("action", "end"))
                 continue
 
+            # —— 控制消息:HITL 恢复(canvas-2)——
+            if msg_type == "resume":
+                if not current_sid:
+                    continue
+                await registry.resume_interrupt(current_sid, msg.get("value", ""))
+                continue
+
             # —— 普通对话消息 ——
             user_input = msg.get("message", "").strip()
             if not user_input:

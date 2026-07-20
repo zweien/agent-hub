@@ -412,18 +412,26 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
     # thread_id 关联 checkpointer:LangGraph 自动加载该 thread 的历史 messages,
     # 本轮只追加新用户消息(修复"对话无上下文"bug)。
     config = {"configurable": {"thread_id": session_id}} if session_id else None
+    # 复用公共流消费逻辑(astream_agent 与 astream_resume_agent 共用,保证事件投影一致)
+    async for ev in _astream_common(agent, inputs, config):
+        yield ev
+
+
+async def _astream_common(agent, inputs, config):
+    """astream_agent / astream_resume_agent 共用的流消费逻辑。
+
+    inputs: 普通消息 dict(astream_agent)或 Command(resume=...)(astream_resume_agent)。
+    产出事件:token/reasoning/todos/tool_*/context_compacted/hitl_interrupt/done/error。
+    检测 __interrupt__ → 发 hitl_interrupt 并提前 return(不发 done)。
+    """
+    from langchain_core.messages import AIMessageChunk, ToolMessage
     # filesystem 工具集合(deepagents FilesystemMiddleware 注入,前端单独成类)
     _FS_TOOLS = {"read_file", "ls", "write_file", "edit_file", "read_multiple_files", "str_replace"}
     # 记录上次 summarization 事件,检测变化(压缩发生时通知前端)
     last_se = None
     try:
-        # 手动迭代 + per-chunk 超时:LLM gateway 流式响应偶尔挂起(收到 200 header
-        # 但 body stream 不再来数据也不报错),导致 agent.astream() 无限等。
-        # 用 wait_for 包 __anext__,90s 无新 chunk 即超时中断,避免静默卡死。
         _STREAM_TIMEOUT_S = 90
         aiter = agent.astream(inputs, config=config, stream_mode=["messages", "updates", "values"]).__aiter__()
-        # 用量累加器(§8 用量统计):一个 turn 内可能多次 LLM call(reasoning→工具→回答),
-        # 每次 call 的末块带各自 usage_metadata,累加成本轮总量,done 时一并发出。
         usage_acc = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         while True:
             try:
@@ -467,6 +475,19 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                     elif isinstance(chunk.content, str) and chunk.content:
                         yield {"type": "token", "content": chunk.content}
             elif mode == "values":
+                # HITL 检测(canvas hitl 节点调 interrupt() → astream 末块带 __interrupt__):
+                # 优先检测,命中则发 hitl_interrupt 并提前 return(不发 done,会话进 awaiting_user)。
+                # value 是 Interrupt 对象的 tuple;取首个的 .value/.id 给前端。
+                if isinstance(payload, dict):
+                    inter = payload.get("__interrupt__")
+                    if inter:
+                        iv = inter[0] if isinstance(inter, (tuple, list)) else inter
+                        yield {
+                            "type": "hitl_interrupt",
+                            "value": getattr(iv, "value", iv),
+                            "interrupt_id": getattr(iv, "id", "") or "",
+                        }
+                        return
                 # values 含完整 state;提取 deepagents 的 todos(计划进度,TodoListMiddleware)
                 todos = payload.get("todos") if isinstance(payload, dict) else None
                 if todos:
@@ -491,6 +512,16 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
             elif mode == "updates":
                 # updates 的 payload 是 {"node_name": node_output} dict(多 stream_mode 下)
                 if isinstance(payload, dict):
+                    # HITL:interrupt 在 updates 模式下产生 {"__interrupt__": (Interrupt,)}
+                    inter = payload.get("__interrupt__")
+                    if inter:
+                        iv = inter[0] if isinstance(inter, (tuple, list)) else inter
+                        yield {
+                            "type": "hitl_interrupt",
+                            "value": getattr(iv, "value", iv),
+                            "interrupt_id": getattr(iv, "id", "") or "",
+                        }
+                        return
                     node_outputs = payload
                 else:  # 兼容旧版二元组
                     _node, node_outputs = payload
@@ -516,5 +547,21 @@ async def astream_agent(user_input: str, model: str = "", enabled_tools: set | N
                                    "is_filesystem": m.name in _FS_TOOLS}
         yield {"type": "done", "usage": usage_acc}
     except Exception as e:
-        logger.exception("astream_agent 失败")
+        logger.exception("_astream_common 失败")
         yield {"type": "error", "message": str(e)}
+
+
+async def astream_resume_agent(resume_value, model: str = "", enabled_tools: set | None = None, system_prompt: str = "", session_id: str = "", subagent_types: list | None = None, canvas_def: dict | None = None):
+    """HITL 恢复(canvas-2):用 Command(resume=value) 重新调用 astream 继续。
+
+    场景:canvas hitl 节点调 interrupt() 暂停 → 前端拿用户输入 → WS resume →
+    此函数用 Command(resume=value) 作 input,同 thread_id 调 astream;节点重跑,
+    interrupt() 这次返回 value,图继续。
+    agent 必须用相同 checkpointer(MemorySaver 单例,按 thread_id 恢复)重建。
+    """
+    from langgraph.types import Command
+    agent = build_agent(model=model, enabled_tools=enabled_tools, system_prompt=system_prompt, subagent_types=subagent_types, canvas_def=canvas_def)
+    config = {"configurable": {"thread_id": session_id}} if session_id else None
+    inputs = Command(resume=resume_value)
+    async for ev in _astream_common(agent, inputs, config):
+        yield ev
