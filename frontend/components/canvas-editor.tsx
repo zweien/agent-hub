@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { XIcon, PlusIcon } from "lucide-react";
+import { XIcon, PlusIcon, TrashIcon } from "lucide-react";
 
 /**
  * 画布编排编辑器(V2 §5)。全屏 overlay,ReactFlow 画布。
@@ -94,8 +94,8 @@ function CanvasNode({ id, data, type, selected }: NodeProps) {
 const nodeTypes = { entry: CanvasNode, exit: CanvasNode, llm: CanvasNode, tool: CanvasNode, subagent: CanvasNode, condition: CanvasNode, hitl: CanvasNode, loop: CanvasNode, parallel: CanvasNode };
 
 // —— 节点参数面板(右侧,选中节点时显示) ——
-function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; onChange: (id: string, data: Partial<CanvasNodeData>) => void }) {
-  if (!node) return <div className="p-4 text-sm text-muted-foreground">点选一个节点编辑参数</div>;
+function NodeInspector({ node, onChange, onDelete }: { node: Node<CanvasNodeData> | null; onChange: (id: string, data: Partial<CanvasNodeData>) => void; onDelete: (id: string) => void }) {
+  if (!node) return <div className="p-4 text-sm text-muted-foreground">点选一个节点编辑参数,或选中节点/连线按 Delete 删除</div>;
   const d = node.data;
   const ntype = node.type as CanvasNodeType;
   return (
@@ -184,6 +184,9 @@ function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; 
           </div>
         </div>
       )}
+      <Button variant="ghost" className="mt-4 text-destructive hover:text-destructive/80" onClick={() => onDelete(node.id)}>
+        <TrashIcon className="size-3.5" /> 删除此节点
+      </Button>
     </div>
   );
 }
@@ -236,6 +239,14 @@ function CanvasInner({ canvasDef, graphRef }: {
     setNodes(ns => ns.map(n => n.id === id ? { ...n, data: { ...n.data, ...patch } } : n));
   };
 
+  const deleteNode = (id: string) => {
+    setNodes(ns => ns.filter(n => n.id !== id));
+    // 级联删该节点相关的边
+    setEdges(es => es.filter(e => e.source !== id && e.target !== id));
+    setSelectedId(null);
+    setEntryId(cur => cur === id ? "" : cur);  // 删了入口节点就清空入口
+  };
+
   const setEntry = (id: string) => {
     const n = nodes.find(x => x.id === id);
     if (n?.type === "entry") { setEntryId(id); }
@@ -264,6 +275,7 @@ function CanvasInner({ canvasDef, graphRef }: {
           nodeTypes={nodeTypes}
           onNodeClick={(_, n) => setSelectedId(n.id)}
           onNodeDoubleClick={(_, n) => { if (n.type === "entry") setEntry(n.id); }}
+          deleteKeyCode={["Backspace", "Delete"]}
           fitView
           className="h-full w-full bg-muted/20"
           style={{ height: "100%" }}
@@ -277,10 +289,10 @@ function CanvasInner({ canvasDef, graphRef }: {
           入口:{entryId || "(双击 entry 节点设为入口)"}
         </div>
       </div>
-      {/* 右:参数面板 */}
-      <div className="w-72 shrink-0 overflow-auto border-l">
-        <NodeInspector node={selectedNode} onChange={updateNodeData} />
-      </div>
+        {/* 右:参数面板 */}
+        <div className="w-72 shrink-0 overflow-auto border-l">
+          <NodeInspector node={selectedNode} onChange={updateNodeData} onDelete={deleteNode} />
+        </div>
     </div>
   );
 }
@@ -313,7 +325,7 @@ export function CanvasEditor({
           </div>
         </DialogHeader>
         <p className="border-b bg-muted/30 px-4 py-1.5 text-[11px] text-muted-foreground">
-          节点:入口/出口/LLM/工具/子代理/条件/人工输入/循环/并行。点左侧加节点 → 连线 → 右侧编辑参数 → 关闭时自动保存。
+          点左侧加节点 → 拖节点上的圆点连线 → 右侧编辑参数 → 关闭时自动保存。选中节点/连线按 <kbd className="rounded bg-muted px-1">Delete</kbd>/<kbd className="rounded bg-muted px-1">Backspace</kbd> 删除,或在右侧面板点「删除此节点」。
         </p>
         <div className="min-h-0 flex-1">
           <ReactFlowProvider>
