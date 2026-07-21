@@ -368,7 +368,7 @@ export function CanvasEditor({
         {/* 自然语言生成栏 */}
         <div className="flex items-center gap-2 border-b bg-muted/20 px-3 py-2">
           <span className="shrink-0 text-xs font-medium text-muted-foreground">✨ 自然语言生成:</span>
-          <Input className="flex-1 text-xs" placeholder="如:检索知识库→分析→人工确认→总结"
+          <Input className="flex-1 text-xs" placeholder={agentId ? "如:检索知识库→分析→人工确认→总结" : "请先保存配置,再使用自然语言生成"}
             value={genDesc} onChange={e => setGenDesc(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !generating) handleGenerate(); }}
             disabled={!canEdit || generating || !agentId} />
@@ -376,6 +376,11 @@ export function CanvasEditor({
             {generating ? "生成中…" : "生成"}
           </Button>
         </div>
+        {!agentId && (
+          <div className="border-b bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+            自然语言生成需要配置已保存(有 agent id)。请先在右侧表单保存配置,再使用生成。
+          </div>
+        )}
         {genError && (
           <div className="border-b bg-red-50 px-3 py-1.5 text-xs text-red-600">⚠️ {genError.slice(0, 200)}</div>
         )}
