@@ -39,8 +39,8 @@ class CanvasCompileError(ValueError):
     """画布图定义非法。message 含节点 id + 原因,供前端定位。"""
 
 
-# 节点类型枚举(canvas-2 加 hitl)
-NODE_TYPES = ("entry", "exit", "llm", "tool", "subagent", "condition", "hitl")
+# 节点类型枚举(canvas-3 加 loop + parallel)
+NODE_TYPES = ("entry", "exit", "llm", "tool", "subagent", "condition", "hitl", "loop", "parallel")
 
 
 def compile_canvas(
@@ -235,6 +235,15 @@ def compile_canvas(
             builder.add_node(nid, _cond_passthrough)
             continue
 
+        if ntype in ("loop", "parallel"):
+            # loop/parallel 节点本身是路由点(pass-through),实际路由在边处理里:
+            #   loop = back-edge conditional(按规则回到 loop_target 或前进)
+            #   parallel = Send fan-out(出边都并发)
+            def _route_passthrough(state):
+                return {}
+            builder.add_node(nid, _route_passthrough)
+            continue
+
     # —— 边 ——
     # START → entry
     builder.add_edge(START, entry_id)
@@ -284,9 +293,65 @@ def compile_canvas(
                     return _default or END
                 return path
             builder.add_conditional_edges(src, _make_path(), path_map=all_targets if all_targets else None)
+        elif src_type == "loop":
+            # loop 节点(canvas-3):按规则决定"继续循环"(回到 loop_target)或"退出"(前进)。
+            # data.loop_target = 要回到的节点 id;data.exit_keyword = 最后消息含此词则退出循环。
+            # 默认行为:无 exit_keyword 或未命中 → 回 loop_target(继续);命中 → 走 exit 出边。
+            data = src_node.get("data") or {}
+            loop_target = data.get("loop_target")
+            exit_keyword = (data.get("exit_keyword") or "").strip().lower()
+            # 出边:一条目标 = loop_target(回环);另一条 = 非 loop_target(退出前进)
+            exit_target = None
+            for e in outs:
+                if e["target"] != loop_target:
+                    exit_target = e["target"]
+            if not loop_target and outs:
+                # 未显式配 loop_target:默认回第一条出边,退出走第二条
+                loop_target = outs[0]["target"]
+                exit_target = outs[1]["target"] if len(outs) > 1 else None
+            targets = [t for t in [loop_target, exit_target] if t]
+
+            def _make_loop_path(_kw=exit_keyword, _loop=loop_target, _exit=exit_target):
+                def path(state):
+                    last = state["messages"][-1] if state.get("messages") else None
+                    text = str(getattr(last, "content", last or "")).lower()
+                    if _kw and _kw in text:
+                        return _exit or END  # 命中退出词 → 前进/结束
+                    return _loop or END  # 否则继续循环
+                return path
+            builder.add_conditional_edges(src, _make_loop_path(), path_map=targets if targets else None)
+        elif src_type == "parallel":
+            # parallel 节点(canvas-3):出边全部并发(Send fan-out)。每个 Send 传完整 state
+            # (canvas 节点都读 state["messages"])。join 由下游收敛点的 add_edge([...]) 处理
+            # (见下方 join 检测)。
+            from langgraph.types import Send
+            branch_targets = [e["target"] for e in outs]
+            if not branch_targets:
+                raise CanvasCompileError(f"节点 {src}(parallel):无出边(至少需 1 条分支)")
+            def _make_parallel_path(_targets=tuple(branch_targets)):
+                def path(state):
+                    return [Send(t, state) for t in _targets]
+                return path
+            builder.add_conditional_edges(src, _make_parallel_path())
         else:
             # 普通节点:每条边 add_edge(若多出边且非 condition,LangGraph 会报错——但 MVP 只支持单出边普通节点)
             for e in outs:
                 builder.add_edge(src, e["target"])
+
+    # —— parallel join(canvas-3):parallel 分支若需在某节点前 wait-for-all 同步,
+    # 用 add_edge([branch1, ...], join) 屏障。MVP:不自动探测汇聚点(分支可独立路由
+    # 到各自下游/END,state 经 DeepAgentState reducer 自动合并);显式 join 由前端
+    # 配置时在 canvas_def 里声明 join_targets(后续增强)。此处仅当 parallel 节点
+    # 的 data 声明了 join_target 时,加一条 list-form 屏障边。
+    for nid, n in node_map.items():
+        if n.get("type") == "parallel":
+            pdata = n.get("data") or {}
+            join_target = pdata.get("join_target")
+            branch_targets = pdata.get("branches") or []  # 显式声明的分支源节点 id 列表
+            if join_target and len(branch_targets) >= 2:
+                try:
+                    builder.add_edge(branch_targets, join_target)
+                except Exception as e:
+                    raise CanvasCompileError(f"parallel 节点 {nid} join 配置非法: {e}")
 
     return builder.compile(checkpointer=checkpointer)

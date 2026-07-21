@@ -20,7 +20,7 @@ import { XIcon, PlusIcon } from "lucide-react";
  * 输出 canvas_def JSON:{nodes, edges, entry_node_id},回传父组件保存。
  */
 
-export type CanvasNodeType = "entry" | "exit" | "llm" | "tool" | "subagent" | "condition" | "hitl";
+export type CanvasNodeType = "entry" | "exit" | "llm" | "tool" | "subagent" | "condition" | "hitl" | "loop" | "parallel";
 
 interface CanvasNodeData {
   // 通用
@@ -34,6 +34,12 @@ interface CanvasNodeData {
   subagent_type?: string;
   // condition
   rules?: { handle: string; contains?: string; target: string }[];
+  // loop
+  loop_target?: string;
+  exit_keyword?: string;
+  // parallel
+  branches?: string[];  // join 分支源节点 id 列表
+  join_target?: string;  // 显式 join 目标
   [key: string]: unknown;
 }
 
@@ -45,6 +51,8 @@ const NODE_META: Record<CanvasNodeType, { label: string; color: string; desc: st
   subagent: { label: "子代理", color: "border-violet-400 bg-violet-50", desc: "委派子代理" },
   condition: { label: "条件", color: "border-orange-400 bg-orange-50", desc: "按消息内容分支" },
   hitl: { label: "人工输入", color: "border-pink-400 bg-pink-50", desc: "暂停等用户输入(Resume)" },
+  loop: { label: "循环", color: "border-cyan-400 bg-cyan-50", desc: "按条件回环或前进" },
+  parallel: { label: "并行", color: "border-teal-400 bg-teal-50", desc: "出边全部并发(Send)" },
 };
 
 let _nodeSeq = 0;
@@ -66,6 +74,8 @@ function CanvasNode({ id, data, type, selected }: NodeProps) {
         {ntype === "subagent" && (d.subagent_type || "(未选子代理)")}
         {ntype === "condition" && `${d.rules?.length || 0} 条规则`}
         {ntype === "hitl" && (d.prompt?.slice(0, 30) || "暂停等输入")}
+        {ntype === "loop" && (d.loop_target ? `回到 ${d.loop_target}` : "回环节点")}
+        {ntype === "parallel" && `${d.branches?.length || 0} 路并发`}
         {ntype === "entry" && "START"}
         {ntype === "exit" && "END"}
       </div>
@@ -81,7 +91,7 @@ function CanvasNode({ id, data, type, selected }: NodeProps) {
   );
 }
 
-const nodeTypes = { entry: CanvasNode, exit: CanvasNode, llm: CanvasNode, tool: CanvasNode, subagent: CanvasNode, condition: CanvasNode, hitl: CanvasNode };
+const nodeTypes = { entry: CanvasNode, exit: CanvasNode, llm: CanvasNode, tool: CanvasNode, subagent: CanvasNode, condition: CanvasNode, hitl: CanvasNode, loop: CanvasNode, parallel: CanvasNode };
 
 // —— 节点参数面板(右侧,选中节点时显示) ——
 function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; onChange: (id: string, data: Partial<CanvasNodeData>) => void }) {
@@ -146,6 +156,32 @@ function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; 
           <label className="mb-1 block text-xs font-medium">提示语(暂停时展示给用户)</label>
           <Textarea className="min-h-16 text-xs" value={d.prompt || ""} onChange={e => onChange(node.id, { prompt: e.target.value })} placeholder="请确认以上方案,或输入修改意见…" />
           <p className="mt-1.5 text-[11px] text-muted-foreground">执行到此节点时暂停,用户在对话框输入后点提交触发 Resume,图继续(输入作为新消息回流)。</p>
+        </div>
+      )}
+      {ntype === "loop" && (
+        <div className="space-y-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium">循环目标节点 id(回到哪个节点)</label>
+            <Input className="text-xs" value={d.loop_target || ""} onChange={e => onChange(node.id, { loop_target: e.target.value })} placeholder="如 n2(画布上某节点 id)" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium">退出关键词(最后消息含此词则退出循环,空=永不退出靠出边)</label>
+            <Input className="text-xs" value={d.exit_keyword || ""} onChange={e => onChange(node.id, { exit_keyword: e.target.value })} placeholder="如 完成" />
+          </div>
+          <p className="text-[11px] text-muted-foreground">出边:一条连回 loop_target(继续),另一条连退出目标(前进)。注意递归上限默认 10007,超长循环会熔断。</p>
+        </div>
+      )}
+      {ntype === "parallel" && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">出边全部并发执行(Send fan-out),每个分支拿到完整 state。分支各自往下走,state 自动合并。</p>
+          <div>
+            <label className="mb-1 block text-xs font-medium">显式 join 目标(可选,分支需在某节点前同步时填)</label>
+            <Input className="text-xs" value={d.join_target || ""} onChange={e => onChange(node.id, { join_target: e.target.value })} placeholder="汇聚节点 id(留空=分支独立)" />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium">join 分支源节点 id 列表(逗号分隔,与 join_target 配合)</label>
+            <Input className="text-xs" value={(d.branches || []).join(",")} onChange={e => onChange(node.id, { branches: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} placeholder="如 n2, n3" />
+          </div>
         </div>
       )}
     </div>
