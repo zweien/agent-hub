@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ReactFlow, ReactFlowProvider, Background, Controls,
   useNodesState, useEdgesState, addEdge,
@@ -189,7 +189,12 @@ function NodeInspector({ node, onChange }: { node: Node<CanvasNodeData> | null; 
 }
 
 // —— 内部:受 ReactFlowProvider 包裹的画布 ——
-function CanvasInner({ canvasDef, onChange }: { canvasDef: Record<string, unknown>; onChange: (d: Record<string, unknown>) => void }) {
+// graphRef:父组件传入的可变 ref,CanvasInner 每次渲染把最新图写进去;
+// 关闭时父组件读 ref 序列化(避免 onChange 实时同步导致的 setState 循环)。
+function CanvasInner({ canvasDef, graphRef }: {
+  canvasDef: Record<string, unknown>;
+  graphRef: React.MutableRefObject<{ nodes: Node<CanvasNodeData>[]; edges: Edge[]; entry_node_id: string }>;
+}) {
   // 从 canvas_def 初始化(若有)。ReactFlow v12 要求每个 node 有 position,缺失时给默认。
   const rawNodes = (canvasDef.nodes as Node<CanvasNodeData>[]) || [];
   const initNodes = rawNodes.map((n, i) => ({
@@ -205,6 +210,10 @@ function CanvasInner({ canvasDef, onChange }: { canvasDef: Record<string, unknow
   const [entryId, setEntryId] = useState(initEntry);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedNode = useMemo(() => nodes.find(n => n.id === selectedId) || null, [nodes, selectedId]);
+
+  // 每次渲染把最新图写进 graphRef.current(只赋值,不触发 setState → 无循环)。
+  // 父组件在"保存并关闭"时读 ref 序列化。
+  graphRef.current = { nodes, edges, entry_node_id: entryId };
 
   const onConnect = useCallback((c: Connection) => {
     setEdges(eds => addEdge({ ...c, markerEnd: { type: MarkerType.ArrowClosed } }, eds));
@@ -231,12 +240,6 @@ function CanvasInner({ canvasDef, onChange }: { canvasDef: Record<string, unknow
     const n = nodes.find(x => x.id === id);
     if (n?.type === "entry") { setEntryId(id); }
   };
-
-  // 每次状态变化都同步回父组件(关闭即保存,父 state 始终最新)。
-  // useEffect 跟踪 nodes/edges/entryId;React 批处理避免高频写库。
-  useEffect(() => {
-    onChange({ nodes, edges, entry_node_id: entryId });
-  }, [nodes, edges, entryId, onChange]);
 
   return (
     <div className="flex h-full">
@@ -291,34 +294,33 @@ export function CanvasEditor({
   onChange: (d: Record<string, unknown>) => void;
   canEdit: boolean;
 }) {
+  // graphRef:CanvasInner 每次渲染把最新图写进 ref.current(不触发 setState);
+  // 关闭时读 ref 序列化回 onChange(避免 onChange 实时同步的 setState 循环)。
+  const graphRef = useRef<{ nodes: Node<CanvasNodeData>[]; edges: Edge[]; entry_node_id: string }>({ nodes: [], edges: [], entry_node_id: "" });
+  const handleClose = () => {
+    onChange(graphRef.current);
+    onOpenChange(false);
+  };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[90vh] w-[95vw] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         <DialogHeader className="flex-row items-center justify-between border-b py-3 pl-4 pr-12">
           <DialogTitle className="text-sm">画布编排编辑器</DialogTitle>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => { /* save 触发在 inner;这里仅关闭 */ onOpenChange(false); }} disabled={!canEdit}>
+            <Button size="sm" onClick={handleClose} disabled={!canEdit}>
               保存并关闭
             </Button>
           </div>
         </DialogHeader>
         <p className="border-b bg-muted/30 px-4 py-1.5 text-[11px] text-muted-foreground">
-          节点:入口/出口/LLM/工具/子代理/条件。点左侧加节点 → 连线 → 右侧编辑参数 → 关闭时自动保存。
-          condition 节点的连边 source_handle 要与规则 handle 一致。
+          节点:入口/出口/LLM/工具/子代理/条件/人工输入/循环/并行。点左侧加节点 → 连线 → 右侧编辑参数 → 关闭时自动保存。
         </p>
         <div className="min-h-0 flex-1">
           <ReactFlowProvider>
-            {/* CanvasInner 内部 onNodesChange 等会触发重渲染,save 逻辑在关闭时序列化 */}
-            <CanvasInnerWithSave canvasDef={canvasDef} onChange={onChange} onClose={() => onOpenChange(false)} />
+            <CanvasInner canvasDef={canvasDef} graphRef={graphRef} />
           </ReactFlowProvider>
         </div>
       </DialogContent>
     </Dialog>
   );
-}
-
-// 包装:关闭前把最新 nodes/edges 序列化回 onChange
-function CanvasInnerWithSave({ canvasDef, onChange, onClose }: { canvasDef: Record<string, unknown>; onChange: (d: Record<string, unknown>) => void; onClose: () => void }) {
-  // 用一个 ref 桥接:CanvasInner 每次 onChange 都更新外层 canvasDef,关闭时已是最新
-  return <CanvasInner canvasDef={canvasDef} onChange={(d) => { onChange(d); }} />;
 }
