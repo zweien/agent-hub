@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ReactFlow, ReactFlowProvider, Background, Controls,
   useNodesState, useEdgesState, addEdge,
@@ -232,9 +232,9 @@ function CanvasInner({ canvasDef, onChange }: { canvasDef: Record<string, unknow
     if (n?.type === "entry") { setEntryId(id); }
   };
 
-  // 每次状态变化都同步回父组件(关闭即保存,父 state 始终最新)
-  // 用 useCallback 包,依赖 nodes/edges/entryId;React 批处理避免高频
-  const sync = useCallback(() => {
+  // 每次状态变化都同步回父组件(关闭即保存,父 state 始终最新)。
+  // useEffect 跟踪 nodes/edges/entryId;React 批处理避免高频写库。
+  useEffect(() => {
     onChange({ nodes, edges, entry_node_id: entryId });
   }, [nodes, edges, entryId, onChange]);
 
