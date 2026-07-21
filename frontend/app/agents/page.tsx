@@ -399,7 +399,7 @@ function ConfigDetail({
         </div>
 
         {/* 画布编辑器(全屏 overlay,仅 type=canvas 时打开) */}
-        <CanvasEditor open={canvasOpen} onOpenChange={setCanvasOpen} canvasDef={canvasDef} onChange={setCanvasDef} canEdit={canEdit} />
+        <CanvasEditor open={canvasOpen} onOpenChange={setCanvasOpen} canvasDef={canvasDef} onChange={setCanvasDef} canEdit={canEdit} agentId={config?.id} token={token} />
 
         {/* 子代理类型(V2 §4):主 agent 调 task 工具按名 spawn */}
         <div>

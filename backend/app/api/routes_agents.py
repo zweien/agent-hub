@@ -33,6 +33,10 @@ class AgentConfigRequest(BaseModel):
     is_published: bool = False
 
 
+class GenerateCanvasRequest(BaseModel):
+    description: str  # 自然语言流程描述
+
+
 @router.get("")
 async def list_agents(user: dict = Depends(get_current_user)):
     """列表:user 看所有已发布;builder/admin 看全部(含自己的草稿)。"""
@@ -104,3 +108,43 @@ async def update_agent(agent_id: str, req: AgentConfigRequest, user: dict = Depe
         return cfg.to_dict()
     finally:
         db.close()
+
+
+@router.post("/{agent_id}/generate-canvas")
+async def generate_canvas_route(agent_id: str, req: GenerateCanvasRequest, user: dict = Depends(require_role("builder", "admin"))):
+    """自然语言生成画布图定义(NL→canvas_def)。
+
+    用该 agent 的 tools + subagent_types 作上下文,LLM 一次调用生成 canvas_def,
+    经 compile_canvas 校验后返回(失败返回 422 + 错误定位)。
+    """
+    from app.agent_runtime.canvas_generator import generate_canvas
+    from app.agent_runtime.canvas_compiler import compile_canvas, CanvasCompileError
+    from langgraph.checkpoint.memory import MemorySaver
+
+    db = SessionLocal()
+    try:
+        cfg = db.get(AgentConfig, agent_id)
+        if not cfg:
+            raise HTTPException(404, "配置不存在")
+        if cfg.owner_id != user["username"] and user["role"] != "admin":
+            raise HTTPException(403, "只能编辑自己的配置")
+        tools = set(cfg.tools or [])
+        subagents = cfg.subagent_types or []
+        model = cfg.model
+    finally:
+        db.close()
+
+    # 1. LLM 生成 canvas_def
+    try:
+        canvas_def = await generate_canvas(req.description, model=model, enabled_tools=tools, subagent_types=subagents)
+    except ValueError as e:
+        raise HTTPException(422, f"生成失败: {e}")
+
+    # 2. 编译校验(确保生成的是可执行图;不校验则前端保存后运行才暴露错误)
+    try:
+        compile_canvas(canvas_def, model, tools, subagents, MemorySaver())
+    except CanvasCompileError as e:
+        # 返回 canvas_def + 错误,前端可展示定位(用户改描述重试)
+        return {"ok": False, "error": f"生成的图编译失败: {e}", "canvas_def": canvas_def}
+
+    return {"ok": True, "canvas_def": canvas_def}

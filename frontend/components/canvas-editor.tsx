@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow, ReactFlowProvider, Background, Controls,
   useNodesState, useEdgesState, addEdge,
@@ -12,6 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
+import { API_BASE } from "@/contexts/auth-context";
 import { XIcon, PlusIcon, TrashIcon } from "lucide-react";
 
 /**
@@ -298,17 +300,56 @@ function CanvasInner({ canvasDef, graphRef }: {
 }
 
 export function CanvasEditor({
-  open, onOpenChange, canvasDef, onChange, canEdit,
+  open, onOpenChange, canvasDef, onChange, canEdit, agentId, token,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   canvasDef: Record<string, unknown>;
   onChange: (d: Record<string, unknown>) => void;
   canEdit: boolean;
+  agentId?: string;
+  token?: string;
 }) {
   // graphRef:CanvasInner 每次渲染把最新图写进 ref.current(不触发 setState);
   // 关闭时读 ref 序列化回 onChange(避免 onChange 实时同步的 setState 循环)。
   const graphRef = useRef<{ nodes: Node<CanvasNodeData>[]; edges: Edge[]; entry_node_id: string }>({ nodes: [], edges: [], entry_node_id: "" });
+  // genVersion:生成新图后递增 → CanvasInner 用 key 重新挂载,加载新 canvasDef
+  const [genVersion, setGenVersion] = useState(0);
+  // 当前生效的 canvasDef(生成后会更新这个,驱动 CanvasInner 重挂载)
+  const [curCanvasDef, setCurCanvasDef] = useState(canvasDef);
+  const [genDesc, setGenDesc] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const toast = useToast();
+
+  useEffect(() => { setCurCanvasDef(canvasDef); }, [canvasDef]);
+
+  const handleGenerate = async () => {
+    if (!agentId || !token || !genDesc.trim()) return;
+    setGenerating(true); setGenError(null);
+    try {
+      const res = await fetch(`${API_BASE}/agents/${agentId}/generate-canvas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ description: genDesc.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setCurCanvasDef(data.canvas_def);
+        setGenVersion(v => v + 1);  // 重挂载 CanvasInner 加载新图
+        toast("success", `已生成 ${(data.canvas_def.nodes || []).length} 个节点`);
+      } else {
+        const msg = data.error || data.detail || `生成失败(${res.status})`;
+        setGenError(msg);
+        toast("error", msg.slice(0, 80));
+      }
+    } catch (e) {
+      setGenError(String(e));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const handleClose = () => {
     onChange(graphRef.current);
     onOpenChange(false);
@@ -324,12 +365,26 @@ export function CanvasEditor({
             </Button>
           </div>
         </DialogHeader>
+        {/* 自然语言生成栏 */}
+        <div className="flex items-center gap-2 border-b bg-muted/20 px-3 py-2">
+          <span className="shrink-0 text-xs font-medium text-muted-foreground">✨ 自然语言生成:</span>
+          <Input className="flex-1 text-xs" placeholder="如:检索知识库→分析→人工确认→总结"
+            value={genDesc} onChange={e => setGenDesc(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !generating) handleGenerate(); }}
+            disabled={!canEdit || generating || !agentId} />
+          <Button size="sm" onClick={handleGenerate} disabled={!canEdit || generating || !genDesc.trim() || !agentId}>
+            {generating ? "生成中…" : "生成"}
+          </Button>
+        </div>
+        {genError && (
+          <div className="border-b bg-red-50 px-3 py-1.5 text-xs text-red-600">⚠️ {genError.slice(0, 200)}</div>
+        )}
         <p className="border-b bg-muted/30 px-4 py-1.5 text-[11px] text-muted-foreground">
           点左侧加节点 → 拖节点上的圆点连线 → 右侧编辑参数 → 关闭时自动保存。选中节点/连线按 <kbd className="rounded bg-muted px-1">Delete</kbd>/<kbd className="rounded bg-muted px-1">Backspace</kbd> 删除,或在右侧面板点「删除此节点」。
         </p>
         <div className="min-h-0 flex-1">
           <ReactFlowProvider>
-            <CanvasInner canvasDef={canvasDef} graphRef={graphRef} />
+            <CanvasInner key={genVersion} canvasDef={curCanvasDef} graphRef={graphRef} />
           </ReactFlowProvider>
         </div>
       </DialogContent>
